@@ -3,7 +3,7 @@
   const $ = id => document.getElementById(id), D = TimelineDates;
   const native = typeof google !== 'undefined' && google.script && google.script.run;
   let endpoint = window.TIMELINE_CONFIG?.endpoint || localStorage.getItem('timeline-endpoint') || '';
-  let events = [], selected = null, editing = null, password = '', pending = null, zoom = 1, mode = 'track', loading = false;
+  let events = [], selected = null, editing = null, draftId = null, password = '', pending = null, zoom = 1, mode = 'track', loading = false;
   const colors = {red:'#c55744',blue:'#4d7daa',green:'#548369',amber:'#b98735',purple:'#8a6aaa'};
   function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error',error); }
   function show(id) { $(id).showModal(); }
@@ -25,13 +25,14 @@
         result = await response.json();
       } catch (e) {
         if (e.name === 'AbortError') throw new Error('Povezava je trajala predolgo. Pred ponovnim shranjevanjem osveži dogodke in preveri, ali je bil vnos shranjen.');
+        if (e instanceof TypeError || e instanceof SyntaxError) throw new Error('Povezava s shrambo ni uspela. Preveri internetno povezavo in poskusi osvežiti stran.');
         throw e;
       } finally {clearTimeout(timeout);}
     }
     if (!result?.ok) throw new Error(result?.error || 'Shramba je vrnila neveljaven odgovor.');
     return result;
   }
-  function errorText(e) { return e instanceof TypeError || e instanceof SyntaxError ? 'Povezava ni uspela. Preveri naslov /exec in objavo z dostopom »Anyone«.' : e.message; }
+  function errorText(e) { return e.message || 'Pri obdelavi dogodka je prišlo do napake.'; }
   async function load() {
     if (loading) return;
     if (!native && !endpoint) {
@@ -79,13 +80,13 @@
     canvas.style.height=Math.max(330,110+lanes.length*108)+'px';
   }
   function detail(e) {selected=e; $('detail-title').textContent=e.title; $('detail-date').textContent=rangeText(e); $('detail-notes').textContent=e.notes||'Za ta dogodek ni opomb.'; show('detail-dialog');}
-  function openEditor(e) {editing=e; $('edit-form').reset(); $('edit-title').textContent=e ? 'Uredi dogodek' : 'Dodaj dogodek'; $('edit-error').textContent=''; if(e){for(const key of ['title','start','end','notes'])$('edit-form').elements[key].value=e[key]; $('edit-form').elements.color.value=e.color;} show('edit-dialog');}
+  function openEditor(e) {editing=e; draftId = e?.id || TimelineIds.create(); $('edit-form').reset(); $('edit-title').textContent=e ? 'Uredi dogodek' : 'Dodaj dogodek'; $('edit-error').textContent=''; if(e){for(const key of ['title','start','end','notes'])$('edit-form').elements[key].value=e[key]; $('edit-form').elements.color.value=e.color;} show('edit-dialog');}
   function authorize(callback) {if(!native && !endpoint){show('settings-dialog');return;}pending=callback;$('auth-form').reset();$('auth-error').textContent='';show('auth-dialog');}
   $('add').onclick=$('first').onclick=()=>authorize(()=>openEditor(null));
   $('auth-form').onsubmit=async e=>{e.preventDefault();$('unlock').disabled=true; $('auth-error').textContent='';try{const p=$('password').value;await request('auth',{password:p});close('auth-dialog');$('password').value='';password=p;pending();}catch(err){$('auth-error').textContent=errorText(err);}finally{$('unlock').disabled=false;}};
   $('edit').onclick=()=>{close('detail-dialog');authorize(()=>openEditor(selected));};
   $('delete').onclick=()=>{const item=selected;close('detail-dialog');authorize(async()=>{if(!confirm(`Izbrišem dogodek »${item.title}«?`)){password='';return;}try{await request('delete',{id:item.id,revision:item.revision,password});events=events.filter(e=>e.id!==item.id);render();notice('Dogodek je izbrisan.');$('sync').textContent='Sprememba shranjena';}catch(err){notice(errorText(err),true);}finally{password='';}});};
-  $('edit-form').onsubmit=async e=>{e.preventDefault();$('edit-error').textContent='';try{const event=D.validate(Object.fromEntries(new FormData(e.target)));$('save').disabled=true;const result=await request('save',{event:{...event,id:editing?.id||crypto.randomUUID(),revision:editing?.revision||''},password});events=events.filter(e=>e.id!==result.event.id);events.push(result.event);render();close('edit-dialog');notice('');$('sync').textContent='Vsi dogodki so shranjeni';}catch(err){$('edit-error').textContent=errorText(err);}finally{$('save').disabled=false;}};
+  $('edit-form').onsubmit=async e=>{e.preventDefault();$('edit-error').textContent='';try{const event=D.validate(Object.fromEntries(new FormData(e.target)));$('save').disabled=true;const result=await request('save',{event:{...event,id:draftId,revision:editing?.revision||''},password});events=events.filter(e=>e.id!==result.event.id);events.push(result.event);render();close('edit-dialog');notice('');$('sync').textContent='Vsi dogodki so shranjeni';}catch(err){$('edit-error').textContent=errorText(err);}finally{$('save').disabled=false;}};
   $('search').oninput=render; $('refresh').onclick=load;
   for(const view of ['track','list']) $(view+'-view').onclick=()=>{mode=view;for(const v of ['track','list']){$(v+'-view').classList.toggle('active',v===view);$(v+'-view').setAttribute('aria-pressed',v===view);}document.querySelector('.zoom').hidden=view==='list';render();};
   $('zoom-in').onclick=()=>{zoom=Math.min(8,zoom*1.5);render();};$('zoom-out').onclick=()=>{zoom=Math.max(1,zoom/1.5);render();};$('fit').onclick=()=>{zoom=1;render();$('track').scrollLeft=0;};

@@ -26,8 +26,8 @@
 <dialog id="edit-dialog"><form id="edit-form"><div class="dialog-top"><p class="eyebrow">NOVO POGLAVJE</p><button type="button" class="close" data-close aria-label="Zapri">×</button></div><h2 id="edit-title">Dodaj dogodek</h2><label>Ime dogodka<input name="title" maxlength="160" required placeholder="Kaj se je zgodilo?"></label><div class="fields"><label>Začetek<input name="start" required placeholder="npr. -500 ali 2026-10-07" inputmode="text"></label><label>Konec <span class="optional">neobvezno</span><input name="end" placeholder="npr. -400 ali 2026-12-31"></label></div><p class="field-help">Vpiši samo leto ali datum LLLL-MM-DD. Za leto pred našim štetjem dodaj minus (npr. -500). Leto 0 ne obstaja. Prazen konec pomeni posamezen dogodek.</p><label>Opombe <span class="optional">neobvezno</span><textarea name="notes" maxlength="5000" rows="4" placeholder="Kontekst, podrobnosti, zanimivosti …"></textarea></label><fieldset class="colors"><legend>Barva dogodka</legend><label><input type="radio" name="color" value="red" checked><span style="--swatch:#c55744">Rdeča</span></label><label><input type="radio" name="color" value="blue"><span style="--swatch:#4d7daa">Modra</span></label><label><input type="radio" name="color" value="green"><span style="--swatch:#548369">Zelena</span></label><label><input type="radio" name="color" value="amber"><span style="--swatch:#b98735">Zlata</span></label><label><input type="radio" name="color" value="purple"><span style="--swatch:#8a6aaa">Vijolična</span></label></fieldset><p id="edit-error" class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" data-close>Skrči zgodbo</button><button class="primary" id="save">Shrani dogodek</button></div></form></dialog>
 <dialog id="detail-dialog"><div class="dialog-top"><p class="eyebrow">DOGODEK NA ČASOVNICI</p><button class="close" data-close aria-label="Zapri">×</button></div><h2 id="detail-title"></h2><p id="detail-date" class="date-label"></p><p id="detail-notes" class="notes"></p><div class="dialog-actions"><button id="delete" class="danger">Izbriši</button><button id="edit" class="primary">Uredi dogodek</button></div></dialog>
 <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-top"><p class="eyebrow">SKUPNA SHRAMBA</p><button type="button" class="close" data-close aria-label="Zapri">×</button></div><h2>Poveži časovnico.</h2><p class="muted">Prilepi spletni naslov objavljenega Google Apps Script. Navodila so v repozitoriju v datoteki README.</p><label>Naslov shrambe<input id="endpoint" type="url" placeholder="https://script.google.com/macros/s/…/exec" required></label><p class="field-help">Za vse obiskovalce nastavi naslov v config.js. Tukaj ga lahko preizkusiš samo v tem brskalniku.</p><p id="settings-error" class="form-error" role="alert"></p><button class="primary full">Poveži in naloži dogodke</button></form></dialog>
-<script>// Paste the deployed Google Apps Script /exec URL here to connect all visitors.
-window.TIMELINE_CONFIG = { endpoint: '' };
+<script>// Shared Google Apps Script backend for every visitor.
+window.TIMELINE_CONFIG = { endpoint: 'https://script.google.com/macros/s/AKfycbwdFBp866iNClUWdol_1mFUqv2RDy9NsGRmhoyLcCXjIi_8YOH1nc9VatlBUBUZGsxyCw/exec' };
 </script><script>/* Historical civil dates: no year zero. Shared by browser, tests and Apps Script. */
 const TimelineDates = (() => {
   function parse(input) {
@@ -76,12 +76,25 @@ const TimelineDates = (() => {
   return {parse,serial,format,fromSerial,validate};
 })();
 if (typeof module !== 'undefined') module.exports = TimelineDates;
+</script><script>const TimelineIds = (() => {
+  function create(cryptoApi = globalThis.crypto) {
+    if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID();
+    if (typeof cryptoApi?.getRandomValues !== 'function') throw new Error('Brskalnik ne podpira ustvarjanja ID-ja. Odpri stran v posodobljenem brskalniku prek HTTPS.');
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+  }
+  return {create};
+})();
+if (typeof module !== 'undefined') module.exports = TimelineIds;
 </script><script>(() => {
   'use strict';
   const $ = id => document.getElementById(id), D = TimelineDates;
   const native = typeof google !== 'undefined' && google.script && google.script.run;
   let endpoint = window.TIMELINE_CONFIG?.endpoint || localStorage.getItem('timeline-endpoint') || '';
-  let events = [], selected = null, editing = null, password = '', pending = null, zoom = 1, mode = 'track', loading = false;
+  let events = [], selected = null, editing = null, draftId = null, password = '', pending = null, zoom = 1, mode = 'track', loading = false;
   const colors = {red:'#c55744',blue:'#4d7daa',green:'#548369',amber:'#b98735',purple:'#8a6aaa'};
   function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error',error); }
   function show(id) { $(id).showModal(); }
@@ -103,13 +116,14 @@ if (typeof module !== 'undefined') module.exports = TimelineDates;
         result = await response.json();
       } catch (e) {
         if (e.name === 'AbortError') throw new Error('Povezava je trajala predolgo. Pred ponovnim shranjevanjem osveži dogodke in preveri, ali je bil vnos shranjen.');
+        if (e instanceof TypeError || e instanceof SyntaxError) throw new Error('Povezava s shrambo ni uspela. Preveri internetno povezavo in poskusi osvežiti stran.');
         throw e;
       } finally {clearTimeout(timeout);}
     }
     if (!result?.ok) throw new Error(result?.error || 'Shramba je vrnila neveljaven odgovor.');
     return result;
   }
-  function errorText(e) { return e instanceof TypeError || e instanceof SyntaxError ? 'Povezava ni uspela. Preveri naslov /exec in objavo z dostopom »Anyone«.' : e.message; }
+  function errorText(e) { return e.message || 'Pri obdelavi dogodka je prišlo do napake.'; }
   async function load() {
     if (loading) return;
     if (!native && !endpoint) {
@@ -157,13 +171,13 @@ if (typeof module !== 'undefined') module.exports = TimelineDates;
     canvas.style.height=Math.max(330,110+lanes.length*108)+'px';
   }
   function detail(e) {selected=e; $('detail-title').textContent=e.title; $('detail-date').textContent=rangeText(e); $('detail-notes').textContent=e.notes||'Za ta dogodek ni opomb.'; show('detail-dialog');}
-  function openEditor(e) {editing=e; $('edit-form').reset(); $('edit-title').textContent=e ? 'Uredi dogodek' : 'Dodaj dogodek'; $('edit-error').textContent=''; if(e){for(const key of ['title','start','end','notes'])$('edit-form').elements[key].value=e[key]; $('edit-form').elements.color.value=e.color;} show('edit-dialog');}
+  function openEditor(e) {editing=e; draftId = e?.id || TimelineIds.create(); $('edit-form').reset(); $('edit-title').textContent=e ? 'Uredi dogodek' : 'Dodaj dogodek'; $('edit-error').textContent=''; if(e){for(const key of ['title','start','end','notes'])$('edit-form').elements[key].value=e[key]; $('edit-form').elements.color.value=e.color;} show('edit-dialog');}
   function authorize(callback) {if(!native && !endpoint){show('settings-dialog');return;}pending=callback;$('auth-form').reset();$('auth-error').textContent='';show('auth-dialog');}
   $('add').onclick=$('first').onclick=()=>authorize(()=>openEditor(null));
   $('auth-form').onsubmit=async e=>{e.preventDefault();$('unlock').disabled=true; $('auth-error').textContent='';try{const p=$('password').value;await request('auth',{password:p});close('auth-dialog');$('password').value='';password=p;pending();}catch(err){$('auth-error').textContent=errorText(err);}finally{$('unlock').disabled=false;}};
   $('edit').onclick=()=>{close('detail-dialog');authorize(()=>openEditor(selected));};
   $('delete').onclick=()=>{const item=selected;close('detail-dialog');authorize(async()=>{if(!confirm(`Izbrišem dogodek »${item.title}«?`)){password='';return;}try{await request('delete',{id:item.id,revision:item.revision,password});events=events.filter(e=>e.id!==item.id);render();notice('Dogodek je izbrisan.');$('sync').textContent='Sprememba shranjena';}catch(err){notice(errorText(err),true);}finally{password='';}});};
-  $('edit-form').onsubmit=async e=>{e.preventDefault();$('edit-error').textContent='';try{const event=D.validate(Object.fromEntries(new FormData(e.target)));$('save').disabled=true;const result=await request('save',{event:{...event,id:editing?.id||crypto.randomUUID(),revision:editing?.revision||''},password});events=events.filter(e=>e.id!==result.event.id);events.push(result.event);render();close('edit-dialog');notice('');$('sync').textContent='Vsi dogodki so shranjeni';}catch(err){$('edit-error').textContent=errorText(err);}finally{$('save').disabled=false;}};
+  $('edit-form').onsubmit=async e=>{e.preventDefault();$('edit-error').textContent='';try{const event=D.validate(Object.fromEntries(new FormData(e.target)));$('save').disabled=true;const result=await request('save',{event:{...event,id:draftId,revision:editing?.revision||''},password});events=events.filter(e=>e.id!==result.event.id);events.push(result.event);render();close('edit-dialog');notice('');$('sync').textContent='Vsi dogodki so shranjeni';}catch(err){$('edit-error').textContent=errorText(err);}finally{$('save').disabled=false;}};
   $('search').oninput=render; $('refresh').onclick=load;
   for(const view of ['track','list']) $(view+'-view').onclick=()=>{mode=view;for(const v of ['track','list']){$(v+'-view').classList.toggle('active',v===view);$(v+'-view').setAttribute('aria-pressed',v===view);}document.querySelector('.zoom').hidden=view==='list';render();};
   $('zoom-in').onclick=()=>{zoom=Math.min(8,zoom*1.5);render();};$('zoom-out').onclick=()=>{zoom=Math.max(1,zoom/1.5);render();};$('fit').onclick=()=>{zoom=1;render();$('track').scrollLeft=0;};
