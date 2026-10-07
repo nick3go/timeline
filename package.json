@@ -1,0 +1,1 @@
+{"name":"casovnica","version":"1.0.0","private":true,"scripts":{"test":"node --test tests/*.test.cjs","build":"node build.cjs","start":"python3 -m http.server 8000"}}
