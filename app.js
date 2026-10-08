@@ -5,7 +5,7 @@
   const supabase = config.provider === 'supabase';
   const native = typeof google !== 'undefined' && google.script && google.script.run;
   let endpoint = supabase ? (config.supabaseUrl ? config.supabaseUrl.replace(/\/$/, '') + '/rest/v1/rpc/timeline_api' : '') : config.endpoint || localStorage.getItem('timeline-endpoint') || '';
-  let events = [], selected = null, editing = null, draftId = null, password = '', pending = null, zoom = 1, mode = 'track', loading = false;
+  let supportsSubevents = false, events = [], selected = null, editing = null, draftId = null, password = '', pending = null, zoom = 1, mode = 'track', loading = false;
   const colors = {red:'#c55744',blue:'#4d7daa',green:'#548369',amber:'#b98735',purple:'#8a6aaa'};
   function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error',error); }
   function show(id) { $(id).showModal(); }
@@ -45,12 +45,22 @@
       $('sync').textContent = 'Shramba ni povezana'; render(); return;
     }
     loading = true; $('refresh').disabled = true; $('sync').textContent = 'Nalagam dogodke …';
-    try { const result = await request('list'); events = result.events; render(); notice(''); $('sync').textContent = 'Vsi dogodki so shranjeni · '+new Date().toLocaleTimeString('sl-SI',{hour:'2-digit',minute:'2-digit'}); }
+    try { const result = await request('list'); events = result.events; supportsSubevents = !!result.supportsSubevents; render(); notice(''); $('sync').textContent = 'Vsi dogodki so shranjeni · '+new Date().toLocaleTimeString('sl-SI',{hour:'2-digit',minute:'2-digit'}); }
     catch(e) {notice(errorText(e),true); $('sync').textContent = 'Povezava ni uspela · prikaz ni osvežen';}
     finally {loading = false; $('refresh').disabled = false;}
   }
   function rangeText(e) { return D.format(e.start) + (e.end ? ' – '+D.format(e.end) : ''); }
-  function visibleEvents() {const q = $('search').value.toLocaleLowerCase('sl'); return events.filter(e => (e.title+' '+e.notes+' '+rangeText(e)).toLocaleLowerCase('sl').includes(q)).sort((a,b)=>D.serial(a.start)-D.serial(b.start)||a.title.localeCompare(b.title,'sl'));}
+  function children(id) { return events.filter(e=>e.parentId===id).sort(compareEvents); }
+  function compareEvents(a,b) {return D.serial(a.start)-D.serial(b.start)||a.title.localeCompare(b.title,'sl');}
+  function parentOf(e) {return events.find(p=>p.id===e.parentId);}
+  function visibleEvents() {
+    const q=$('search').value.toLocaleLowerCase('sl').trim();
+    const matches=e=>(e.title+' '+e.notes+' '+rangeText(e)).toLocaleLowerCase('sl').includes(q);
+    return events.filter(e=>!e.parentId || !parentOf(e)).sort(compareEvents).flatMap(root=>{
+      const nested=children(root.id), matching=nested.filter(matches);
+      return matches(root) ? [root,...nested] : matching.length ? [root,...matching] : [];
+    });
+  }
   function el(tag,className,text) {const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node;}
   function render() {
     $('count').textContent = events.length;
@@ -63,7 +73,7 @@
     if (!filtered.length) return;
     if (mode === 'list') {
       $('list').replaceChildren();
-      filtered.forEach(e => {const b = el('button','list-event'); b.style.setProperty('--event-color',colors[e.color]); b.append(el('span','list-date',rangeText(e))); const info=el('span'); info.append(el('strong','',e.title)); if(e.notes) info.append(el('span','excerpt',e.notes)); b.append(info,el('span','','↗')); b.onclick=()=>detail(e); $('list').append(b);});
+      filtered.forEach(e => {const b = el('button','list-event'); b.style.setProperty('--event-color',colors[e.color]); b.classList.toggle('subevent',!!e.parentId); b.append(el('span','list-date',rangeText(e))); const info=el('span'); info.append(el('strong','',e.title)); if(e.parentId)info.append(el('span','parent-label','↳ '+(parentOf(e)?.title||'')));  if(e.notes) info.append(el('span','excerpt',e.notes)); b.append(info,el('span','','↗')); b.onclick=()=>detail(e); $('list').append(b);});
       return;
     }
     const canvas = $('canvas'); canvas.replaceChildren();
@@ -73,25 +83,51 @@
     const x = value => 30+(value-start)/(finish-start)*(width-230);
     const tickCount=Math.max(3,Math.floor(width/145));
     for(let i=0;i<=tickCount;i++) {const value=Math.round(start+(finish-start)*i/tickCount), date=D.fromSerial(value); const tick=el('div','tick');tick.style.left=x(value)+'px';tick.append(el('span','',span<730 ? D.format(date) : D.format({year:date.year,month:null,day:null})));canvas.append(tick);}
-    const lanes=[];
+    let row=0;
     filtered.forEach(e=>{
       const left=x(D.serial(e.start)), end=e.end ? x(D.serial(e.end,true)) : left;
       const barWidth=Math.max(190,Math.min(390,end-left));
-      let lane=lanes.findIndex(right=>right+18<left); if(lane<0)lane=lanes.length; lanes[lane]=Math.max(left+barWidth,end);
-      const top=65+lane*108;
-      if(e.end){const line=el('div','duration-line');line.style.cssText=`left:${left}px;top:${top+84}px;width:${Math.max(3,end-left)}px;--event-color:${colors[e.color]}`;canvas.append(line);}
-      const b=el('button','event-bar');b.style.cssText=`left:${left}px;top:${top}px;width:${barWidth}px;--event-color:${colors[e.color]}`;b.append(el('strong','',e.title),el('small','',rangeText(e))); b.title=e.title+' · '+rangeText(e);b.onclick=()=>detail(e); canvas.append(b);
+      const top=65+row++*120;
+      if(e.end){const line=el('div','duration-line');line.style.cssText=`left:${left}px;top:${top+100}px;width:${Math.max(3,end-left)}px;--event-color:${colors[e.color]}`;canvas.append(line);}
+      const b=el('button','event-bar'+(e.parentId?' subevent':''));b.style.cssText=`left:${left}px;top:${top}px;width:${barWidth}px;--event-color:${colors[e.color]}`;b.append(el('strong','',e.title),el('small','',rangeText(e))); if(e.parentId)b.append(el('span','parent-label','↳ '+(parentOf(e)?.title||''))); else if(children(e.id).length)b.append(el('span','parent-label',children(e.id).length+' poddogodkov')); b.title=e.title+' · '+rangeText(e);b.onclick=()=>detail(e); canvas.append(b);
     });
-    canvas.style.height=Math.max(330,110+lanes.length*108)+'px';
+    canvas.style.height=Math.max(330,110+row*120)+'px';
   }
-  function detail(e) {selected=e; $('detail-title').textContent=e.title; $('detail-date').textContent=rangeText(e); $('detail-notes').textContent=e.notes||'Za ta dogodek ni opomb.'; show('detail-dialog');}
-  function openEditor(e) {editing=e; draftId = e?.id || TimelineIds.create(); $('edit-form').reset(); $('edit-title').textContent=e ? 'Uredi dogodek' : 'Dodaj dogodek'; $('edit-error').textContent=''; if(e){for(const key of ['title','start','end','notes'])$('edit-form').elements[key].value=e[key]; $('edit-form').elements.color.value=e.color;} show('edit-dialog');}
+  function detail(e) {
+    selected=e; $('detail-title').textContent=e.title; $('detail-date').textContent=rangeText(e);
+    $('detail-notes').textContent=e.notes||'Za ta dogodek ni opomb.';
+    const parent=parentOf(e); $('detail-parent').hidden=!parent;
+    $('detail-parent').textContent=parent ? '↳ '+parent.title : '';
+    $('detail-parent').onclick=()=>{close('detail-dialog');detail(parent);};
+    const nested=children(e.id); $('detail-children').replaceChildren();
+    $('children-section').hidden=!nested.length;
+    nested.forEach(child=>{const b=el('button','child-detail');b.append(el('strong','',child.title),el('span','',rangeText(child)));b.onclick=()=>{close('detail-dialog');detail(child);};$('detail-children').append(b);});
+    $('add-child').hidden=!supportsSubevents || !e.end || !!e.parentId;
+    $('delete').disabled=nested.length>0; $('delete').title=nested.length ? 'Najprej odstrani ali prestavi poddogodke.' : '';
+    $('children-help').hidden=!nested.length;
+    show('detail-dialog');
+  }
+  function openEditor(e, parentId='') {
+    editing=e; draftId=e?.id || TimelineIds.create(); $('edit-form').reset();
+    $('edit-title').textContent=e ? 'Uredi dogodek' : parentId ? 'Dodaj poddogodek' : 'Dodaj dogodek'; $('edit-error').textContent='';
+    $('parent-field').hidden=!supportsSubevents;
+    const select=$('parent-id'); select.replaceChildren(el('option','','Samostojen dogodek')); select.options[0].value='';
+    const hasChildren=e && children(e.id).length>0;
+    events.filter(p=>p.end && !p.parentId && p.id!==e?.id && !hasChildren).sort(compareEvents).forEach(p=>{const option=el('option','',p.title+' · '+rangeText(p));option.value=p.id;select.append(option);});
+    select.value=e?.parentId || parentId || ''; select.disabled=!!hasChildren;
+    if(e){for(const key of ['title','start','end','notes'])$('edit-form').elements[key].value=e[key]; $('edit-form').elements.color.value=e.color;}
+    else if(parentId){$('edit-form').elements.color.value=events.find(p=>p.id===parentId)?.color||'red';}
+    updateParentHint(); show('edit-dialog');
+  }
+  function updateParentHint() {const p=events.find(e=>e.id===$('parent-id').value);$('parent-help').textContent=p ? 'Obdobje: '+rangeText(p)+'. Datumi poddogodka morajo biti znotraj tega obdobja.' : 'Dogodek lahko dodeliš obdobju z začetkom in koncem.';}
+  $('parent-id').onchange=updateParentHint;
+  $('add-child').onclick=()=>{const parent=selected;close('detail-dialog');authorize(()=>openEditor(null,parent.id));};
   function authorize(callback) {if(!native && !endpoint){show('settings-dialog');return;}pending=callback;$('auth-form').reset();$('auth-error').textContent='';show('auth-dialog');}
   $('add').onclick=$('first').onclick=()=>authorize(()=>openEditor(null));
   $('auth-form').onsubmit=async e=>{e.preventDefault();$('unlock').disabled=true; $('auth-error').textContent='';try{const p=$('password').value;await request('auth',{password:p});close('auth-dialog');$('password').value='';password=p;pending();}catch(err){$('auth-error').textContent=errorText(err);}finally{$('unlock').disabled=false;}};
   $('edit').onclick=()=>{close('detail-dialog');authorize(()=>openEditor(selected));};
   $('delete').onclick=()=>{const item=selected;close('detail-dialog');authorize(async()=>{if(!confirm(`Izbrišem dogodek »${item.title}«?`)){password='';return;}try{await request('delete',{id:item.id,revision:item.revision,password});events=events.filter(e=>e.id!==item.id);render();notice('Dogodek je izbrisan.');$('sync').textContent='Sprememba shranjena';}catch(err){notice(errorText(err),true);}finally{password='';}});};
-  $('edit-form').onsubmit=async e=>{e.preventDefault();$('edit-error').textContent='';try{const event=D.validate(Object.fromEntries(new FormData(e.target)));$('save').disabled=true;const result=await request('save',{event:{...event,id:draftId,revision:editing?.revision||''},password});events=events.filter(e=>e.id!==result.event.id);events.push(result.event);render();close('edit-dialog');notice('');$('sync').textContent='Vsi dogodki so shranjeni';}catch(err){$('edit-error').textContent=errorText(err);}finally{$('save').disabled=false;}};
+  $('edit-form').onsubmit=async e=>{e.preventDefault();$('edit-error').textContent='';try{const event=D.validate(Object.fromEntries(new FormData(e.target)));const parentId=supportsSubevents ? $('parent-id').value : editing?.parentId||''; const parent=events.find(p=>p.id===parentId); if(parent && (D.serial(event.start)<D.serial(parent.start) || D.serial(event.end||event.start,true)>D.serial(parent.end,true)))throw new Error('Poddogodek mora biti znotraj obdobja nadrejenega dogodka.');$('save').disabled=true;const result=await request('save',{event:{...event,id:draftId,revision:editing?.revision||'',...(supportsSubevents?{parentId}: {})},password});events=events.filter(e=>e.id!==result.event.id);events.push(result.event);render();close('edit-dialog');notice('');$('sync').textContent='Vsi dogodki so shranjeni';}catch(err){$('edit-error').textContent=errorText(err);}finally{$('save').disabled=false;}};
   $('search').oninput=render; $('refresh').onclick=load;
   for(const view of ['track','list']) $(view+'-view').onclick=()=>{mode=view;for(const v of ['track','list']){$(v+'-view').classList.toggle('active',v===view);$(v+'-view').setAttribute('aria-pressed',v===view);}document.querySelector('.zoom').hidden=view==='list';render();};
   $('zoom-in').onclick=()=>{zoom=Math.min(8,zoom*1.5);render();};$('zoom-out').onclick=()=>{zoom=Math.max(1,zoom/1.5);render();};$('fit').onclick=()=>{zoom=1;render();$('track').scrollLeft=0;};
