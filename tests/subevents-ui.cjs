@@ -25,6 +25,28 @@ f.dispatchEvent(new w.Event('submit',{cancelable:true}));await flush();assert.eq
 await auth();await flush();assert.equal(authCalls,2);assert.equal(lastSaved.title,'Draft kept after expiry');assert.equal(d.querySelector('#edit-dialog').open,false);
 now=1199999;d.querySelector('#add').click();assert.equal(d.querySelector('#auth-dialog').open,false);d.querySelector('#edit-dialog').close();
 now=1200000;d.querySelector('#add').click();assert.equal(d.querySelector('#auth-dialog').open,true,'Repeated use does not extend the deadline');
+
+await auth();
+events.push(
+  {id:'wide',title:'Široko obdobje',start:'-600',end:'-300',notes:'',color:'green',revision:'wide',parentId:null},
+  {id:'narrow',title:'Ožje obdobje',start:'-470',end:'-430',notes:'',color:'blue',revision:'narrow',parentId:null}
+);
+d.querySelector('#edit-dialog').close();d.querySelector('#refresh').click();await flush();d.querySelector('#add').click();
+const dateInput=(name,value)=>{f.elements[name].value=value;f.elements[name].dispatchEvent(new w.Event('input'));};
+dateInput('start','-450');assert.equal(d.querySelector('#parent-id').value,'narrow','Smallest containing period is selected, including BCE');
+dateInput('end','-420');assert.equal(d.querySelector('#parent-id').value,'root','Both dates must fit');
+dateInput('start','-550');assert.equal(d.querySelector('#parent-id').value,'wide');
+dateInput('start','-700');assert.equal(d.querySelector('#parent-id').value,'','No matching period means standalone');
+dateInput('start','-');assert.equal(d.querySelector('#parent-id').value,'');
+dateInput('start','-450');dateInput('end','');assert.equal(d.querySelector('#parent-id').value,'narrow');
+d.querySelector('#parent-id').value='';d.querySelector('#parent-id').dispatchEvent(new w.Event('change'));
+dateInput('start','-440');assert.equal(d.querySelector('#parent-id').value,'','Manual standalone selection survives date changes');
+f.elements.title.value='Manual standalone';f.dispatchEvent(new w.Event('submit',{cancelable:true}));await flush();assert.equal(lastSaved.parentId,'');
+d.querySelector('#add').click();f.elements.title.value='Autofill dates';f.elements.start.value='-450';f.elements.end.value='';f.dispatchEvent(new w.Event('submit',{cancelable:true}));await flush();assert.equal(lastSaved.parentId,'narrow','Save also handles autofilled dates');
+d.querySelector('#add').click();dateInput('start','-470');dateInput('end','-430');assert.equal(d.querySelector('#parent-id').value,'root','Equal-sized period is not a larger parent');
+d.querySelector('#edit-dialog').close();
+console.log('Automatic parent selection passed: BCE, shortest period, both bounds, invalid dates, manual override, fresh drafts and autofill.');
+
 assert.equal(w.localStorage.length,0,'Editor password is never persisted');
 w.close();console.log('Ten-minute auth passed: reuse, fixed expiry, reauthentication and draft preservation. UI passed: grouped timeline/list/search, child details, password flow, bounds, saving and unassigning.');
 })();
