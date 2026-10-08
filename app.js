@@ -1,8 +1,10 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), D = TimelineDates;
+  const config = window.TIMELINE_CONFIG || {};
+  const supabase = config.provider === 'supabase';
   const native = typeof google !== 'undefined' && google.script && google.script.run;
-  let endpoint = window.TIMELINE_CONFIG?.endpoint || localStorage.getItem('timeline-endpoint') || '';
+  let endpoint = supabase ? (config.supabaseUrl ? config.supabaseUrl.replace(/\/$/, '') + '/rest/v1/rpc/timeline_api' : '') : config.endpoint || localStorage.getItem('timeline-endpoint') || '';
   let events = [], selected = null, editing = null, draftId = null, password = '', pending = null, zoom = 1, mode = 'track', loading = false;
   const colors = {red:'#c55744',blue:'#4d7daa',green:'#548369',amber:'#b98735',purple:'#8a6aaa'};
   function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error',error); }
@@ -15,10 +17,13 @@
     if (native) {
       result = await new Promise((resolve,reject) => google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).api({action,...data}));
     } else {
-      if (!endpoint) throw new Error('Shramba še ni povezana. Najprej nastavi povezavo z Google Sheets.');
+      if (!endpoint) throw new Error('Shramba še ni povezana. Najprej nastavi povezavo s shrambo.');
       const controller = new AbortController(), timeout = setTimeout(() => controller.abort(),25000);
       try {
-        const response = action === 'list'
+        if (supabase && !config.publishableKey) throw new Error('Javni ključ Supabase še ni nastavljen.');
+        const response = supabase
+          ? await fetch(endpoint, {method:'POST',headers:{'Content-Type':'application/json',apikey:config.publishableKey},body:JSON.stringify({payload:{action,...data}}),signal:controller.signal})
+          : action === 'list'
           ? await fetch(endpoint+'?api=1&t='+Date.now(), {signal:controller.signal,redirect:'follow'})
           : await fetch(endpoint, {method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action,...data}),signal:controller.signal,redirect:'follow'});
         if (!response.ok) throw new Error('Shramba se ni odzvala. Preveri povezavo in dovoljenja objave.');
@@ -36,7 +41,7 @@
   async function load() {
     if (loading) return;
     if (!native && !endpoint) {
-      notice('Časovnica še ni povezana s shrambo. Za skupno shranjevanje nastavi povezavo z Google Sheets.');
+      notice('Časovnica še ni povezana s shrambo. Za skupno shranjevanje nastavi povezavo s shrambo.');
       $('sync').textContent = 'Shramba ni povezana'; render(); return;
     }
     loading = true; $('refresh').disabled = true; $('sync').textContent = 'Nalagam dogodke …';
@@ -90,7 +95,7 @@
   $('search').oninput=render; $('refresh').onclick=load;
   for(const view of ['track','list']) $(view+'-view').onclick=()=>{mode=view;for(const v of ['track','list']){$(v+'-view').classList.toggle('active',v===view);$(v+'-view').setAttribute('aria-pressed',v===view);}document.querySelector('.zoom').hidden=view==='list';render();};
   $('zoom-in').onclick=()=>{zoom=Math.min(8,zoom*1.5);render();};$('zoom-out').onclick=()=>{zoom=Math.max(1,zoom/1.5);render();};$('fit').onclick=()=>{zoom=1;render();$('track').scrollLeft=0;};
-  $('settings').hidden=!!native;$('settings').onclick=()=>{$('endpoint').value=endpoint;$('settings-error').textContent='';show('settings-dialog');};
+  $('settings').hidden=!!native || supabase;$('settings').onclick=()=>{$('endpoint').value=endpoint;$('settings-error').textContent='';show('settings-dialog');};
   $('settings-form').onsubmit=async e=>{e.preventDefault();const url=$('endpoint').value.trim();if(!/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url)){$('settings-error').textContent='Uporabi naslov Google Apps Script, ki se konča z /exec.';return;}endpoint=url;localStorage.setItem('timeline-endpoint',url);events=[];render();close('settings-dialog');await load();};
   let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(render,120);});
   window.addEventListener('focus',()=>{if(!document.querySelector('dialog[open]'))load();});
