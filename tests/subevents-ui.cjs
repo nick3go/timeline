@@ -1,0 +1,21 @@
+const {JSDOM}=require('jsdom'),fs=require('node:fs'),assert=require('node:assert/strict');
+(async()=>{
+const dom=new JSDOM(fs.readFileSync('index.html','utf8'),{url:'https://timeline.test',runScripts:'outside-only'}),w=dom.window,d=w.document;
+w.HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};
+w.HTMLDialogElement.prototype.close=function(){this.removeAttribute('open');this.dispatchEvent(new w.Event('close'));};
+let events=[{id:'root',title:'Obdobje',start:'-500',end:'-400',notes:'',color:'blue',revision:'r1',parentId:null},{id:'child',title:'Bitka',start:'-450',end:'',notes:'Opis',color:'red',revision:'r2',parentId:'root'}],lastSaved;
+w.TIMELINE_CONFIG={provider:'supabase',supabaseUrl:'https://test.invalid',publishableKey:'test-public'};
+w.fetch=async(url,args)=>{const p=JSON.parse(args.body).payload;if(p.action==='save'){lastSaved=p.event;const event={...p.event,revision:'new'};events=events.filter(e=>e.id!==event.id);events.push(event);return {ok:true,json:async()=>({ok:true,event})};}return {ok:true,json:async()=>p.action==='list'?{ok:true,events,supportsSubevents:true}:{ok:true}};};
+w.eval(['dates.js','ids.js','app.js'].map(file=>fs.readFileSync(file,'utf8')).join('\n')); 
+const flush=()=>new Promise(r=>setTimeout(r,0));const auth=async()=>{d.querySelector('#password').value='test-only';d.querySelector('#auth-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await flush();};await flush();
+assert.equal(d.querySelector('#count').textContent,'2');assert.equal(d.querySelectorAll('.event-bar.subevent').length,1);
+d.querySelector('.event-bar').click();assert.equal(d.querySelectorAll('.child-detail').length,1);assert.equal(d.querySelector('#delete').disabled,true);assert.equal(d.querySelector('#add-child').hidden,false);
+d.querySelector('#add-child').click();await auth();assert.equal(d.querySelector('#parent-id').value,'root');assert.match(d.querySelector('#parent-help').textContent,/500/);
+const f=d.querySelector('#edit-form');f.elements.title.value='Nova bitka';f.elements.start.value='-399';f.dispatchEvent(new w.Event('submit',{cancelable:true}));await flush();assert.equal(lastSaved,undefined);assert.match(d.querySelector('#edit-error').textContent,/znotraj/);
+f.elements.start.value='-420';f.dispatchEvent(new w.Event('submit',{cancelable:true}));await flush();assert.equal(lastSaved.parentId,'root');assert.equal(lastSaved.start,'-420');assert.equal(d.querySelector('#count').textContent,'3');
+d.querySelector('#search').value='Bitka';d.querySelector('#search').dispatchEvent(new w.Event('input'));assert.equal(d.querySelectorAll('.event-bar').length,3);assert.equal(d.querySelector('.event-bar strong').textContent,'Obdobje');
+d.querySelector('#list-view').click();assert.equal(d.querySelectorAll('.list-event.subevent').length,2);
+d.querySelector('.list-event.subevent').click();assert.equal(d.querySelector('#add-child').hidden,true);assert.equal(d.querySelector('#detail-parent').textContent,'↳ Obdobje');
+d.querySelector('#edit').click();await auth();assert.equal(d.querySelector('#parent-id').value,'root');d.querySelector('#parent-id').value='';f.dispatchEvent(new w.Event('submit',{cancelable:true}));await flush();assert.equal(lastSaved.parentId,'');
+w.close();console.log('UI passed: grouped timeline/list/search, child details, password flow, bounds, saving and unassigning.');
+})();
