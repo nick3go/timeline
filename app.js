@@ -121,7 +121,14 @@
     $('parent-field').hidden=!supportsSubevents;
     const select=$('parent-id'); select.replaceChildren(el('option','','Samostojen dogodek')); select.options[0].value='';
     const hasChildren=e && children(e.id).length>0;const excluded=new Set(e ? [e.id,...descendants(e.id).map(c=>c.id)] : []);
-    events.filter(p=>p.end && !excluded.has(p.id) && (supportsNestedEvents || (!p.parentId && !hasChildren))).sort(compareEvents).forEach(p=>{const option=el('option','',[...ancestors(p).map(a=>a.title),p.title].join(' › ')+' · '+rangeText(p));option.value=p.id;select.append(option);});
+    const ordered=[],seen=new Set();
+    function addParent(p){if(seen.has(p.id))return;seen.add(p.id);ordered.push(p);children(p.id).forEach(addParent);}
+    events.filter(p=>!p.parentId || !parentOf(p)).sort(compareEvents).forEach(addParent);
+    ordered.filter(p=>!excluded.has(p.id) && (supportsNestedEvents || (!p.parentId && !hasChildren))).forEach(p=>{
+      const depth=ancestors(p).length;
+      const label=(depth?'↳ '.repeat(depth):'')+[...ancestors(p).map(a=>a.title),p.title].join(' › ')+' · '+rangeText(p)+(p.end?'':' — najprej dodaj konec');
+      const option=el('option','',label);option.value=p.id;option.disabled=!p.end;select.append(option);
+    });
     select.value=e?.parentId || parentId || ''; select.disabled=!!hasChildren && !supportsNestedEvents;
     if(e){for(const key of ['title','start','end','notes'])$('edit-form').elements[key].value=e[key]; $('edit-form').elements.color.value=e.color;}
     else if(parentId){$('edit-form').elements.color.value=events.find(p=>p.id===parentId)?.color||'red';}
