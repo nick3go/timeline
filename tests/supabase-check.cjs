@@ -4,7 +4,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict'),crypto=require(
 for(const date of ['-999999','-500-03-09','-1','1','2000-02-29','2026','999999-12-31']){const r=(await db.query('select timeline_private.parse_date($1) as d',[date])).rows[0].d;assert.equal(r.lower,D.serial(date));assert.equal(r.upper,D.serial(date,true));}
 await db.exec("insert into timeline_private.settings(password_hash) values (extensions.crypt('test-only',extensions.gen_salt('bf')));");await db.exec('set role anon');
 const call=async p=>(await db.query('select public.timeline_api($1::jsonb) as response',[JSON.stringify(p)])).rows[0].response;
-assert.deepEqual(await call({action:'list'}),{ok:true,events:[]});assert.equal((await call({action:'auth',password:'wrong'})).ok,false);
+assert.deepEqual(await call({action:'list'}),{ok:true,events:[],supportsSubevents:true});assert.equal((await call({action:'auth',password:'wrong'})).ok,false);
 await assert.rejects(()=>db.query('select * from timeline_private.settings'),/permission denied/);
 const event={id:crypto.randomUUID(),title:'Antika',start:'-500',end:'-400',notes:'',color:'blue',revision:''};
 assert.equal((await call({action:'save',event,password:'wrong'})).ok,false);const saved=await call({action:'save',event,password:'test-only'});assert.equal(saved.ok,true,JSON.stringify(saved));assert.equal((await call({action:'list'})).events[0].start,'-500');
@@ -13,4 +13,20 @@ assert.equal((await call({action:'delete',id:event.id,revision:saved.event.revis
 assert.equal((await call({action:'delete',id:event.id,revision:edited.event.revision,password:'test-only'})).ok,true);
 for(const start of ['0','2025-02-29','2026-13-01'])assert.equal((await call({action:'save',event:{...event,id:crypto.randomUUID(),start,end:''},password:'test-only'})).ok,false);
 assert.equal((await call({action:'save',event:{...event,id:crypto.randomUUID(),end:'-600'},password:'test-only'})).ok,false);
+const save=event=>call({action:'save',event,password:'test-only'});
+const root=(await save({...event,id:crypto.randomUUID()})).event;
+const childDraft={...event,id:crypto.randomUUID(),title:'Poddogodek',start:'-450',end:'',parentId:root.id};
+let child=(await save(childDraft)).event;assert.ok(child);assert.equal(child.parentId,root.id); const legacyEdit={...child,title:'Legacy edit'};delete legacyEdit.parentId;child=(await save(legacyEdit)).event;assert.equal(child.parentId,root.id);
+for(const changes of [{start:'-501'},{start:'-399'},{end:'-399'},{parentId:crypto.randomUUID()},{parentId:child.id}])assert.equal((await save({...childDraft,id:crypto.randomUUID(),...changes})).ok,false);
+for(const changes of [{parentId:root.id},{end:''},{end:'-460'}])assert.equal((await save({...root,...changes})).ok,false);
+assert.equal((await call({action:'delete',id:root.id,revision:root.revision,password:'test-only'})).ok,false);
+const second=(await save({...event,id:crypto.randomUUID(),start:'-600',end:'-300'})).event;
+assert.equal((await save({...root,parentId:second.id})).ok,false);
+const moved=await save({...child,parentId:second.id});assert.equal(moved.ok,true);
+assert.equal((await call({action:'delete',id:root.id,revision:root.revision,password:'test-only'})).ok,true);
+const freed=await save({...moved.event,parentId:''});assert.equal(freed.ok,true);assert.equal(freed.event.parentId,null);
+await db.exec('reset role');const before=(await call({action:'list'})).events;
+await db.exec(fs.readFileSync('supabase/subevents.sql','utf8'));await db.exec(fs.readFileSync('supabase/subevents.sql','utf8'));
+assert.deepEqual((await call({action:'list'})).events,before);assert.equal((await call({action:'auth',password:'test-only'})).ok,true);
+console.log('Subevents passed: BCE bounds, missing parents, cycles, nesting, reparenting, parent bounds/deletion and repeatable migration.');
 console.log('Supabase SQL passed: historical dates, public reads, hidden tables, wrong password, create/read/edit/delete, invalid dates and stale revisions.');await db.close();})();
