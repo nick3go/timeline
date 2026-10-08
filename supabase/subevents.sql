@@ -1,0 +1,103 @@
+-- Run once in Supabase SQL Editor. Keeps existing events and editor password.
+begin;
+-- Additive migration: existing events remain top-level events.
+alter table timeline_private.events add column if not exists parent_id uuid
+  references timeline_private.events(id) on delete restrict;
+create index if not exists timeline_events_parent_idx on timeline_private.events(parent_id);
+create or replace function timeline_private.event_json(e timeline_private.events)
+returns jsonb language sql immutable set search_path = '' as $$
+  select jsonb_build_object('id',e.id,'title',e.title,'start',e.start_text,'end',e.end_text,'notes',e.notes,'color',e.color,'revision',e.revision,'parentId',e.parent_id);
+$$;
+revoke all on function timeline_private.event_json(timeline_private.events) from public, anon, authenticated;
+
+-- Single public API. Public reads; password-protected writes. No direct table access.
+create or replace function public.timeline_api(payload jsonb)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare
+  action text := payload->>'action'; expected text; supplied text := payload->>'password';
+  item jsonb; event_id uuid; old_event timeline_private.events; new_event timeline_private.events;
+  start_date jsonb; end_date jsonb; event_title text; event_notes text; event_color text;
+  supplied_revision text; result jsonb; chosen_parent uuid; parent_event timeline_private.events;
+begin
+  if payload is null or jsonb_typeof(payload) <> 'object' or octet_length(payload::text) > 20000 then
+    return jsonb_build_object('ok',false,'error','Neveljavna zahteva.');
+  end if;
+  if action = 'list' then
+    select coalesce(jsonb_agg(timeline_private.event_json(e) order by e.updated_at,e.id),'[]'::jsonb) into result from timeline_private.events e;
+    return jsonb_build_object('ok',true,'events',result,'supportsSubevents',true);
+  end if;
+  if action is null or action not in ('auth','save','delete') then return jsonb_build_object('ok',false,'error','Neznano dejanje.'); end if;
+  select password_hash into expected from timeline_private.settings where singleton;
+  if expected is null then return jsonb_build_object('ok',false,'error','Skrbnik mora najprej nastaviti geslo.'); end if;
+  if supplied is null or octet_length(supplied) > 72 then return jsonb_build_object('ok',false,'error','Napačno geslo.'); end if;
+  if extensions.crypt(supplied,expected) <> expected then return jsonb_build_object('ok',false,'error','Napačno geslo.'); end if;
+  if action = 'auth' then return jsonb_build_object('ok',true); end if;
+  item := case when action='save' then payload->'event' else payload end;
+  if item is null or jsonb_typeof(item) <> 'object' then return jsonb_build_object('ok',false,'error','Dogodek manjka.'); end if;
+  event_id := (item->>'id')::uuid;
+  if event_id is null then return jsonb_build_object('ok',false,'error','ID dogodka manjka.'); end if;
+  -- Serialize hierarchy changes to prevent parent edits racing with child inserts.
+  perform pg_advisory_xact_lock(hashtextextended('timeline:hierarchy',0));
+  select * into old_event from timeline_private.events where id=event_id;
+  supplied_revision := coalesce(item->>'revision','');
+  if old_event.id is not null and old_event.revision::text <> supplied_revision then
+    return jsonb_build_object('ok',false,'error','Dogodek je medtem spremenil nekdo drug. Osveži stran in poskusi znova.');
+  end if;
+  if old_event.id is null and (action='delete' or supplied_revision <> '') then
+    return jsonb_build_object('ok',false,'error','Dogodek ne obstaja več. Osveži stran.');
+  end if;
+  if action='delete' then
+    if exists(select 1 from timeline_private.events where parent_id=event_id) then
+      raise exception 'Najprej odstrani poddogodke ali jih prestavi med samostojne dogodke.';
+    end if;
+    delete from timeline_private.events where id=event_id;
+    return jsonb_build_object('ok',true);
+  end if;
+  event_title := btrim(item->>'title'); event_notes := btrim(coalesce(item->>'notes',''));
+  event_color := coalesce(item->>'color','red');
+  if event_title is null or length(event_title) not between 1 and 160 then raise exception 'Ime dogodka mora imeti od 1 do 160 znakov.'; end if;
+  if length(event_notes)>5000 then raise exception 'Opombe so lahko dolge največ 5000 znakov.'; end if;
+  if event_color not in ('red','blue','green','amber','purple') then event_color := 'red'; end if;
+  if item->>'start' is null then raise exception 'Začetek dogodka manjka.'; end if;
+  start_date := timeline_private.parse_date(item->>'start');
+  if coalesce(item->>'end','') <> '' then
+    end_date := timeline_private.parse_date(item->>'end');
+    if (end_date->>'upper')::bigint < (start_date->>'lower')::bigint then raise exception 'Konec ne sme biti pred začetkom.'; end if;
+  end if;
+  chosen_parent := case when item ? 'parentId' then nullif(item->>'parentId','')::uuid else old_event.parent_id end;
+  if chosen_parent is not null then
+    if chosen_parent=event_id then raise exception 'Dogodek ne more biti svoj poddogodek.'; end if;
+    select * into parent_event from timeline_private.events where id=chosen_parent;
+    if parent_event.id is null or parent_event.end_text='' or parent_event.parent_id is not null then
+      raise exception 'Izberi samostojen nadrejeni dogodek z začetkom in koncem.';
+    end if;
+    if exists(select 1 from timeline_private.events where events.parent_id=event_id) then
+      raise exception 'Dogodek s poddogodki mora ostati samostojen.';
+    end if;
+    if (start_date->>'lower')::bigint < (timeline_private.parse_date(parent_event.start_text)->>'lower')::bigint
+       or (coalesce(end_date,start_date)->>'upper')::bigint > (timeline_private.parse_date(parent_event.end_text)->>'upper')::bigint then
+      raise exception 'Poddogodek mora biti znotraj obdobja nadrejenega dogodka.';
+    end if;
+  end if;
+  if exists(select 1 from timeline_private.events where events.parent_id=event_id) then
+    if end_date is null then raise exception 'Dogodek s poddogodki mora imeti konec.'; end if;
+    if exists(select 1 from timeline_private.events child where child.parent_id=event_id
+      and ((timeline_private.parse_date(child.start_text)->>'lower')::bigint < (start_date->>'lower')::bigint
+       or (timeline_private.parse_date(coalesce(nullif(child.end_text,''),child.start_text))->>'upper')::bigint > (end_date->>'upper')::bigint)) then
+      raise exception 'Obdobje mora zajemati vse poddogodke. Najprej uredi njihove datume.';
+    end if;
+  end if;
+  insert into timeline_private.events(id,title,start_text,end_text,notes,color,revision,parent_id)
+    values(event_id,event_title,start_date->>'value',coalesce(end_date->>'value',''),event_notes,event_color,gen_random_uuid(),chosen_parent)
+  on conflict(id) do update set title=excluded.title,start_text=excluded.start_text,end_text=excluded.end_text,notes=excluded.notes,color=excluded.color,parent_id=excluded.parent_id,revision=excluded.revision,updated_at=now()
+  returning * into new_event;
+  return jsonb_build_object('ok',true,'event',timeline_private.event_json(new_event));
+exception
+  when invalid_text_representation then return jsonb_build_object('ok',false,'error','Neveljaven ID dogodka.');
+  when raise_exception then return jsonb_build_object('ok',false,'error',sqlerrm);
+  when others then return jsonb_build_object('ok',false,'error','Shranjevanje ni uspelo. Poskusi znova ali obvesti skrbnika.');
+end $$;
+revoke all on function public.timeline_api(jsonb) from public, anon, authenticated;
+grant execute on function public.timeline_api(jsonb) to anon, authenticated;
+notify pgrst, 'reload schema';
+commit;
