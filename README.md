@@ -67,12 +67,18 @@ Datumski in strežniški testi preverijo datume pr. n. št., prehod iz -1 v 1, p
 
 Uradna dokumentacija: [Apps Script Web Apps](https://developers.google.com/apps-script/guides/web), [Properties Service](https://developers.google.com/apps-script/guides/properties), [Lock Service](https://developers.google.com/apps-script/reference/lock), [HTML service client communication](https://developers.google.com/apps-script/guides/html/communication).
 
-## Poddogodki
+## Gnezdeni dogodki, brisanje in slike
 
-V obstoječem Supabase projektu enkrat zaženi `supabase/subevents.sql` v SQL Editorju. Migracija ohrani vse dogodke in obstoječe geslo. Nato osveži aplikacijo. Podpora se v uporabniškem vmesniku vklopi šele, ko jo potrdi API.
+V obstoječem Supabase projektu za časovnico zaženi `supabase/nesting-images.sql` v SQL Editorju. Migracija ohrani dogodke, njihove povezave, revizije in geslo. Deluje tudi, če prejšnja migracija poddogodkov še ni bila izvedena. Nato osveži stran. Novi možnosti se vključita šele, ko ju potrdi API.
 
-Odpri samostojen dogodek z začetkom in koncem ter izberi **Dodaj poddogodek**. Poddogodek ima svoje datume, opombe in barvo. Njegovi datumi morajo biti znotraj nadrejenega obdobja; podprta je ena raven poddogodkov. V urejevalniku lahko tudi obstoječ dogodek dodeliš nadrejenemu dogodku ali ga prestaviš med samostojne dogodke.
+Vsak dogodek z začetkom in koncem ima lahko poddogodke, tudi če je sam poddogodek. Datumi ostanejo znotraj nadrejenega obdobja. Pri premikanju dogodka ostanejo njegovi poddogodki povezani z njim. Krožno gnezdenje ni dovoljeno. Samodejna izbira nadrejenega dogodka upošteva tudi gnezdena obdobja; ročna izbira ima prednost.
 
-Na traku in seznamu so poddogodki združeni pod nadrejenim dogodkom. Iskanje pokaže nadrejeni dogodek skupaj z najdenimi poddogodki. Nadrejenega dogodka ni mogoče izbrisati ali skrajšati mimo njegovih poddogodkov. Najprej jih uredi, prestavi ali izbriši.
+Ob brisanju dogodka s poddogodki moraš izbrati:
+- Izbris dogodka in vseh njegovih poddogodkov na vseh ravneh.
+- Izbris samo dogodka; vsi njegovi potomci postanejo samostojni dogodki.
 
-Preverjanje migracije: `NODE_PATH=/pot/do/node_modules node tests/supabase-check.cjs` (PGlite s pgcrypto). Preverjanje vmesnika: `NODE_PATH=/pot/do/node_modules node tests/subevents-ui.cjs` (jsdom).
+Privzete izbire ni. Brisanje je zaščiteno z geslom in primerjavo revizij vseh potomcev. Če jih kdo medtem doda, uredi ali premakne, je treba osvežiti stran in odločitev ponovno potrditi. Vse spremembe se izvedejo v eni transakciji.
+
+Dogodku lahko dodaš eno sliko z računalnika (JPG, PNG ali WebP, največ 10 MB) ali naslov HTTPS. Naložena slika se pomanjša na največ 1200 pik in po potrebi dodatno stisne ter shrani skupaj z dogodkom v Supabase. Lahko jo zamenjaš ali odstraniš. Prikazana je na kartici, seznamu in v podrobnostih dogodka. Geslo ni shranjeno v repozitoriju.
+
+Preverjanje: `npm test`; `tests/supabase-check.cjs` in `tests/nesting-images.cjs` zahtevata PGlite s pgcrypto, `tests/subevents-ui.cjs` in `tests/nesting-ui.cjs` pa jsdom. Paketa namesti ločeno in nastavi `NODE_PATH`, kadar nista nameščena v projektu.

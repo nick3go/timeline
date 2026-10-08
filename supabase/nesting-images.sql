@@ -1,72 +1,10 @@
--- Run in the SQL Editor of the NEW shared apps project.
--- This creates only timeline-owned objects. No editor password is stored in this file.
+-- Run in timeline project SQL Editor. Preserves events and password.
 begin;
-create schema if not exists extensions;
-create extension if not exists pgcrypto with schema extensions;
-create schema if not exists timeline_private;
-revoke all on schema timeline_private from public, anon, authenticated;
-
-create table if not exists timeline_private.settings (
-  singleton boolean primary key default true check (singleton),
-  password_hash text not null
-);
-create table if not exists timeline_private.events (
-  id uuid primary key,
-  title text not null check (length(btrim(title)) between 1 and 160),
-  start_text text not null,
-  end_text text not null default '',
-  notes text not null default '' check (length(notes) <= 5000),
-  color text not null default 'red' check (color in ('red','blue','green','amber','purple')),
-  revision uuid not null default gen_random_uuid(),
-  updated_at timestamptz not null default now()
-);
 -- Additive migration: existing events remain top-level events.
 alter table timeline_private.events add column if not exists parent_id uuid
   references timeline_private.events(id) on delete restrict;
 alter table timeline_private.events add column if not exists image text not null default '';
 create index if not exists timeline_events_parent_idx on timeline_private.events(parent_id);
-alter table timeline_private.events enable row level security;
-alter table timeline_private.settings enable row level security;
-revoke all on all tables in schema timeline_private from public, anon, authenticated;
-
--- Validate historical dates without PostgreSQL's BC date-range limitation.
--- Result contains the canonical input, first day and last day (for year-only dates).
-create or replace function timeline_private.parse_date(input text)
-returns jsonb language plpgsql immutable set search_path = '' as $$
-declare
-  parts text[]; civil bigint; astro bigint; mm int; dd int;
-  month_days int[]; canonical text; lower_day bigint; upper_day bigint;
-  y bigint; era bigint; yo bigint; mp bigint; i int;
-begin
-  parts := regexp_match(btrim(input), '^(-?[0-9]{1,6})(?:-([0-9]{1,2})-([0-9]{1,2}))?$');
-  if parts is null then raise exception 'Vpiši leto ali datum LLLL-MM-DD.'; end if;
-  civil := parts[1]::bigint;
-  if civil = 0 then raise exception 'Leto 0 ne obstaja.'; end if;
-  astro := case when civil < 0 then civil + 1 else civil end;
-  month_days := array[31,case when mod(astro,4)=0 and (mod(astro,100)<>0 or mod(astro,400)=0) then 29 else 28 end,31,30,31,30,31,31,30,31,30,31];
-  if parts[2] is not null then
-    mm := parts[2]::int; dd := parts[3]::int;
-    if mm < 1 or mm > 12 or dd < 1 or dd > month_days[mm] then raise exception 'Ta datum ne obstaja.'; end if;
-    canonical := civil::text || '-' || lpad(mm::text,2,'0') || '-' || lpad(dd::text,2,'0');
-  else
-    canonical := civil::text;
-  end if;
-  for i in 1..2 loop
-    mm := coalesce(parts[2]::int, case when i=1 then 1 else 12 end);
-    dd := coalesce(parts[3]::int, case when i=1 then 1 else 31 end);
-    y := astro - case when mm <= 2 then 1 else 0 end;
-    era := floor(y::numeric / 400)::bigint; yo := y - era * 400;
-    mp := mm + case when mm > 2 then -3 else 9 end;
-    if i=1 then
-      lower_day := era*146097 + yo*365 + yo/4 - yo/100 + (153*mp+2)/5 + dd - 1;
-    else
-      upper_day := era*146097 + yo*365 + yo/4 - yo/100 + (153*mp+2)/5 + dd - 1;
-    end if;
-  end loop;
-  return jsonb_build_object('value',canonical,'lower',lower_day,'upper',upper_day);
-end $$;
-revoke all on function timeline_private.parse_date(text) from public, anon, authenticated;
-
 create or replace function timeline_private.event_json(e timeline_private.events)
 returns jsonb language sql immutable set search_path = '' as $$
   select jsonb_build_object('id',e.id,'title',e.title,'start',e.start_text,'end',e.end_text,'notes',e.notes,'color',e.color,'revision',e.revision,'parentId',e.parent_id,'image',e.image);
