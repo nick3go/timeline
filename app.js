@@ -5,7 +5,7 @@
   const supabase = config.provider === 'supabase';
   const native = typeof google !== 'undefined' && google.script && google.script.run;
   let endpoint = supabase ? (config.supabaseUrl ? config.supabaseUrl.replace(/\/$/, '') + '/rest/v1/rpc/timeline_api' : '') : config.endpoint || localStorage.getItem('timeline-endpoint') || '';
-  let supportsSubevents = false, events = [], selected = null, editing = null, draftId = null, password = '', authExpiresAt = 0, authTimer = null, pending = null, zoom = 1, mode = 'track', loading = false;
+  let parentManuallyChosen = false, supportsSubevents = false, events = [], selected = null, editing = null, draftId = null, password = '', authExpiresAt = 0, authTimer = null, pending = null, zoom = 1, mode = 'track', loading = false;
   const colors = {red:'#c55744',blue:'#4d7daa',green:'#548369',amber:'#b98735',purple:'#8a6aaa'};
   function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error',error); }
   function show(id) { $(id).showModal(); }
@@ -112,7 +112,7 @@
     show('detail-dialog');
   }
   function openEditor(e, parentId='') {
-    editing=e; draftId=e?.id || TimelineIds.create(); $('edit-form').reset();
+    editing=e; parentManuallyChosen=!!e || !!parentId; draftId=e?.id || TimelineIds.create(); $('edit-form').reset();
     $('edit-title').textContent=e ? 'Uredi dogodek' : parentId ? 'Dodaj poddogodek' : 'Dodaj dogodek'; $('edit-error').textContent='';
     $('parent-field').hidden=!supportsSubevents;
     const select=$('parent-id'); select.replaceChildren(el('option','','Samostojen dogodek')); select.options[0].value='';
@@ -123,15 +123,37 @@
     else if(parentId){$('edit-form').elements.color.value=events.find(p=>p.id===parentId)?.color||'red';}
     updateParentHint(); show('edit-dialog');
   }
-  function updateParentHint() {const p=events.find(e=>e.id===$('parent-id').value);$('parent-help').textContent=p ? 'Obdobje: '+rangeText(p)+'. Datumi poddogodka morajo biti znotraj tega obdobja.' : 'Dogodek lahko dodeliš obdobju z začetkom in koncem.';}
-  $('parent-id').onchange=updateParentHint;
+  function updateParentHint() {const p=events.find(e=>e.id===$('parent-id').value);$('parent-help').textContent=p ? 'Obdobje: '+rangeText(p)+'. Datumi poddogodka morajo biti znotraj tega obdobja.' : 'Glede na datume se nadrejeni dogodek izbere samodejno. Izbiro lahko ročno spremeniš.';}
+  function chooseParentFromDates() {
+    if (!supportsSubevents || parentManuallyChosen || editing) return;
+    const form=$('edit-form'), select=$('parent-id');
+    let chosen='';
+    try {
+      const start=D.serial(form.elements.start.value);
+      const end=D.serial(form.elements.end.value || form.elements.start.value,true);
+      if (end>=start) {
+        const candidates=events.filter(p=>{
+          if(!p.end || p.parentId || p.id===draftId)return false;
+          const lower=D.serial(p.start), upper=D.serial(p.end,true);
+          return lower<=start && upper>=end && (lower<start || upper>end);
+        }).sort((a,b)=>(D.serial(a.end,true)-D.serial(a.start))-(D.serial(b.end,true)-D.serial(b.start)) || compareEvents(a,b) || a.id.localeCompare(b.id));
+        chosen=candidates[0]?.id || '';
+      }
+    } catch (_) { /* Wait for complete, valid dates. */ }
+    select.value=chosen; updateParentHint();
+  }
+  $('parent-id').onchange=()=>{parentManuallyChosen=true;updateParentHint();};
+  for(const name of ['start','end']) {
+    $('edit-form').elements[name].addEventListener('input',chooseParentFromDates);
+    $('edit-form').elements[name].addEventListener('change',chooseParentFromDates);
+  }
   $('add-child').onclick=()=>{const parent=selected;close('detail-dialog');authorize(()=>openEditor(null,parent.id));};
   function authorize(callback) {if(editingUnlocked()){callback();return;}if(!native && !endpoint){show('settings-dialog');return;}pending=callback;$('auth-form').reset();$('auth-error').textContent='';show('auth-dialog');}
   $('add').onclick=$('first').onclick=()=>authorize(()=>openEditor(null));
   $('auth-form').onsubmit=async e=>{e.preventDefault();$('unlock').disabled=true; $('auth-error').textContent='';try{const p=$('password').value;await request('auth',{password:p});close('auth-dialog');$('password').value='';unlockEditing(p);const callback=pending;pending=null;callback();}catch(err){$('auth-error').textContent=errorText(err);}finally{$('unlock').disabled=false;}};
   $('edit').onclick=()=>{close('detail-dialog');authorize(()=>openEditor(selected));};
   $('delete').onclick=()=>{const item=selected;close('detail-dialog');authorize(async()=>{if(!confirm(`Izbrišem dogodek »${item.title}«?`)){return;}try{await request('delete',{id:item.id,revision:item.revision,password});events=events.filter(e=>e.id!==item.id);render();notice('Dogodek je izbrisan.');$('sync').textContent='Sprememba shranjena';}catch(err){notice(errorText(err),true);}});};
-  $('edit-form').onsubmit=async e=>{e.preventDefault();if(!editingUnlocked()){authorize(()=>$('edit-form').requestSubmit());return;}$('edit-error').textContent='';try{const event=D.validate(Object.fromEntries(new FormData(e.target)));const parentId=supportsSubevents ? $('parent-id').value : editing?.parentId||''; const parent=events.find(p=>p.id===parentId); if(parent && (D.serial(event.start)<D.serial(parent.start) || D.serial(event.end||event.start,true)>D.serial(parent.end,true)))throw new Error('Poddogodek mora biti znotraj obdobja nadrejenega dogodka.');$('save').disabled=true;const result=await request('save',{event:{...event,id:draftId,revision:editing?.revision||'',...(supportsSubevents?{parentId}: {})},password});events=events.filter(e=>e.id!==result.event.id);events.push(result.event);render();close('edit-dialog');notice('');$('sync').textContent='Vsi dogodki so shranjeni';}catch(err){$('edit-error').textContent=errorText(err);}finally{$('save').disabled=false;}};
+  $('edit-form').onsubmit=async e=>{e.preventDefault();if(!editingUnlocked()){authorize(()=>$('edit-form').requestSubmit());return;}$('edit-error').textContent='';try{chooseParentFromDates();const event=D.validate(Object.fromEntries(new FormData(e.target)));const parentId=supportsSubevents ? $('parent-id').value : editing?.parentId||''; const parent=events.find(p=>p.id===parentId); if(parent && (D.serial(event.start)<D.serial(parent.start) || D.serial(event.end||event.start,true)>D.serial(parent.end,true)))throw new Error('Poddogodek mora biti znotraj obdobja nadrejenega dogodka.');$('save').disabled=true;const result=await request('save',{event:{...event,id:draftId,revision:editing?.revision||'',...(supportsSubevents?{parentId}: {})},password});events=events.filter(e=>e.id!==result.event.id);events.push(result.event);render();close('edit-dialog');notice('');$('sync').textContent='Vsi dogodki so shranjeni';}catch(err){$('edit-error').textContent=errorText(err);}finally{$('save').disabled=false;}};
   $('search').oninput=render; $('refresh').onclick=load;
   for(const view of ['track','list']) $(view+'-view').onclick=()=>{mode=view;for(const v of ['track','list']){$(v+'-view').classList.toggle('active',v===view);$(v+'-view').setAttribute('aria-pressed',v===view);}document.querySelector('.zoom').hidden=view==='list';render();};
   $('zoom-in').onclick=()=>{zoom=Math.min(8,zoom*1.5);render();};$('zoom-out').onclick=()=>{zoom=Math.max(1,zoom/1.5);render();};$('fit').onclick=()=>{zoom=1;render();$('track').scrollLeft=0;};
