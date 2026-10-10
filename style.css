@@ -48,3 +48,6 @@ footer:has(button[hidden]){display:none}
  .dialog-actions button{min-height:44px}
  .parent-link{max-width:100%;overflow-wrap:anywhere}
 }
+
+
+.event-bar{min-width:0}.event-bar.compact{padding:10px 2px}.event-bar.compact .event-image{display:none}.event-bar.compact small{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}

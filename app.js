@@ -11,7 +11,7 @@
   function show(id) { $(id).showModal(); }
   function close(id) { $(id).close(); }
   document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => b.closest('dialog').close());
-  const AUTH_DURATION = 10 * 60 * 1000;
+  const AUTH_DURATION = 20 * 60 * 1000;
   function lockEditing() {password='';authExpiresAt=0;clearTimeout(authTimer);authTimer=null;}
   function editingUnlocked() {if(password && performance.now()<authExpiresAt)return true;lockEditing();return false;}
   function unlockEditing(value) {lockEditing();password=value;authExpiresAt=performance.now()+AUTH_DURATION;authTimer=setTimeout(lockEditing,AUTH_DURATION);}
@@ -91,15 +91,33 @@
     const x = value => 30+(value-start)/(finish-start)*(width-230);
     const tickCount=Math.max(3,Math.floor(width/145));
     for(let i=0;i<=tickCount;i++) {const value=Math.round(start+(finish-start)*i/tickCount), date=D.fromSerial(value); const tick=el('div','tick');tick.style.left=x(value)+'px';tick.append(el('span','',span<730 ? D.format(date) : D.format({year:date.year,month:null,day:null})));canvas.append(tick);}
-    let row=0;
+    // Use the entered boundary (also for year-only dates), so touching periods share a lane.
+    const lanes=[], placements=new Map();
+    const overlaps=(a,b)=> {
+      const aStart=D.serial(a.start), bStart=D.serial(b.start);
+      const endsBefore=(event,start)=>event.end && D.serial(event.end)===start ||
+        D.serial(event.end||event.start,Boolean(event.end))<=start;
+      return aStart===bStart || !(endsBefore(a,bStart) || endsBefore(b,aStart));
+    };
     filtered.forEach(e=>{
-      const left=x(D.serial(e.start)), end=e.end ? x(D.serial(e.end,true)) : left;
-      const barWidth=Math.max(190,Math.min(390,end-left));
-      const top=65+row++*120;
-      if(e.end){const line=el('div','duration-line');line.style.cssText=`left:${left}px;top:${top+100}px;width:${Math.max(3,end-left)}px;--event-color:${colors[e.color]}`;canvas.append(line);}
-      const b=el('button','event-bar'+(e.parentId?' subevent':''));b.style.cssText=`left:${left}px;top:${top}px;width:${barWidth}px;--event-color:${colors[e.color]}`;b.append(el('strong','',e.title),el('small','',rangeText(e))); if(e.parentId)b.append(el('span','parent-label','↳ '+ancestors(e).map(p=>p.title).join(' › '))); else if(children(e.id).length)b.append(el('span','parent-label',children(e.id).length+' poddogodkov')); if(e.image){b.classList.add('has-image');b.append(imageNode(e,'event-image'));}b.title=e.title+' · '+rangeText(e);b.onclick=()=>detail(e); canvas.append(b);
+      let row=e.parentId && placements.has(e.parentId) ? placements.get(e.parentId)+1 : 0;
+      while(lanes[row]?.some(other=>overlaps(e,other)))row++;
+      (lanes[row] ||= []).push(e);placements.set(e.id,row);
     });
-    canvas.style.height=Math.max(330,110+row*120)+'px';
+    lanes.forEach(lane=>lane.sort(compareEvents));
+    filtered.forEach(e=>{
+      const row=placements.get(e.id), lane=lanes[row], next=lane[lane.indexOf(e)+1];
+      const left=x(D.serial(e.start)), end=e.end ? x(D.serial(e.end,true)) : left;
+      const available=next ? Math.max(1,x(D.serial(next.start))-left-4) : Infinity;
+      const barWidth=Math.min(Math.max(190,Math.min(390,end-left)),available);
+      const top=65+row*120;
+      if(e.end){const line=el('div','duration-line');line.style.cssText=`left:${left}px;top:${top+100}px;width:${Math.max(1,Math.min(end-left,available))}px;--event-color:${colors[e.color]}`;canvas.append(line);}
+      const b=el('button','event-bar'+(e.parentId?' subevent':''));b.style.cssText=`left:${left}px;top:${top}px;width:${barWidth}px;--event-color:${colors[e.color]}`;b.append(el('strong','',e.title),el('small','',rangeText(e))); if(e.parentId)b.append(el('span','parent-label','↳ '+ancestors(e).map(p=>p.title).join(' › '))); else if(children(e.id).length)b.append(el('span','parent-label',children(e.id).length+' poddogodkov')); if(e.image){b.classList.add('has-image');b.append(imageNode(e,'event-image'));}b.title=e.title+' · '+rangeText(e);b.onclick=()=>detail(e); canvas.append(b);
+      // Compact cards retain their full accessible name and open the same detail dialog.
+      b.classList.toggle('compact',barWidth<100);
+      b.setAttribute('aria-label',e.title+' · '+rangeText(e));
+    });
+    canvas.style.height=Math.max(330,110+lanes.length*120)+'px';
   }
   function detail(e) {
     selected=e; $('detail-title').textContent=e.title; $('detail-date').textContent=rangeText(e);
@@ -198,3 +216,4 @@
   window.addEventListener('focus',()=>{if(!document.querySelector('dialog[open]'))load();});
   load();
 })();
+

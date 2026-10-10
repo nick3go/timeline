@@ -18,13 +18,13 @@ d.querySelector('#search').value='Bitka';d.querySelector('#search').dispatchEven
 d.querySelector('#list-view').click();assert.equal(d.querySelectorAll('.list-event.subevent').length,2);
 d.querySelector('.list-event.subevent').click();assert.equal(d.querySelector('#add-child').hidden,true);assert.equal(d.querySelector('#detail-parent').textContent,'↳ Obdobje');
 d.querySelector('#edit').click();await auth();assert.equal(d.querySelector('#parent-id').value,'root');d.querySelector('#parent-id').value='';f.dispatchEvent(new w.Event('submit',{cancelable:true}));await flush();assert.equal(lastSaved.parentId,'');
-assert.equal(authCalls,1,'Editor close and subsequent edits reuse the ten-minute unlock');
+assert.equal(authCalls,1,'Editor close and subsequent edits reuse the twenty-minute unlock');
 d.querySelector('#add').click();assert.equal(d.querySelector('#auth-dialog').open,false);assert.equal(d.querySelector('#edit-dialog').open,true);
-f.elements.title.value='Draft kept after expiry';f.elements.start.value='2026';now=600000;
-f.dispatchEvent(new w.Event('submit',{cancelable:true}));await flush();assert.equal(d.querySelector('#auth-dialog').open,true,'Save after ten minutes requires authentication');assert.equal(lastSaved.title,'Bitka');
+f.elements.title.value='Draft kept after expiry';f.elements.start.value='2026';now=1200000;
+f.dispatchEvent(new w.Event('submit',{cancelable:true}));await flush();assert.equal(d.querySelector('#auth-dialog').open,true,'Save after twenty minutes requires authentication');assert.equal(lastSaved.title,'Bitka');
 await auth();await flush();assert.equal(authCalls,2);assert.equal(lastSaved.title,'Draft kept after expiry');assert.equal(d.querySelector('#edit-dialog').open,false);
-now=1199999;d.querySelector('#add').click();assert.equal(d.querySelector('#auth-dialog').open,false);d.querySelector('#edit-dialog').close();
-now=1200000;d.querySelector('#add').click();assert.equal(d.querySelector('#auth-dialog').open,true,'Repeated use does not extend the deadline');
+now=2399999;d.querySelector('#add').click();assert.equal(d.querySelector('#auth-dialog').open,false);d.querySelector('#edit-dialog').close();
+now=2400000;d.querySelector('#add').click();assert.equal(d.querySelector('#auth-dialog').open,true,'Repeated use does not extend the deadline');
 
 await auth();
 events.push(
@@ -48,5 +48,6 @@ d.querySelector('#edit-dialog').close();
 console.log('Automatic parent selection passed: BCE, shortest period, both bounds, invalid dates, manual override, fresh drafts and autofill.');
 
 assert.equal(w.localStorage.length,0,'Editor password is never persisted');
-w.close();console.log('Ten-minute auth passed: reuse, fixed expiry, reauthentication and draft preservation. UI passed: grouped timeline/list/search, child details, password flow, bounds, saving and unassigning.');
+w.close();console.log('Twenty-minute auth passed: reuse, fixed expiry, reauthentication and draft preservation. UI passed: grouped timeline/list/search, child details, password flow, bounds, saving and unassigning.');
 })();
+
