@@ -29,6 +29,7 @@ wheel(100);assert.ok(Number.isFinite(track.scrollLeft),'Zoom out keeps a valid s
 const short=()=>[...d.querySelectorAll('.event-bar')].find(b=>b.querySelector('strong').textContent==='Short A');
 d.querySelector('#fit').click();assert.equal(canvas.style.width,'800px');assert.equal(track.scrollLeft,0);
 short().click();d.querySelector('#focus-event').click();assert.ok(parseFloat(short().style.width)>=180,'Event focus makes a short event readable');
+assert.ok(track.scrollTop>0,'Event focus also reveals its vertical lane');
 assert.equal(d.querySelector('#detail-dialog').open,false);
 for(let i=0;i<40;i++)wheel(-400);
 assert.ok(parseFloat(canvas.style.width)<=16000000);assert.equal(d.querySelector('#zoom-in').disabled,true);

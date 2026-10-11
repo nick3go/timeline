@@ -25,6 +25,8 @@
     const viewport=$('track').clientWidth || 800, geometry=timelineGeometry;
     setZoom((230+(geometry.finish-geometry.start)*viewport*.65/span)/baseWidth());
     $('track').scrollLeft=Math.max(0,timelineGeometry.x(start)-viewport*.15);drawTicks();
+    const card=[...$('canvas').querySelectorAll('.event-bar')].find(b=>b.getAttribute('aria-label')===event.title+' · '+rangeText(event));
+    if(card)$('track').scrollTop=Math.max(0,parseFloat(card.style.top)-$('track').clientHeight*.35);
   }
   function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error',error); }
   function show(id) { $(id).showModal(); }
