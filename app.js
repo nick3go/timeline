@@ -7,6 +7,25 @@
   let endpoint = supabase ? (config.supabaseUrl ? config.supabaseUrl.replace(/\/$/, '') + '/rest/v1/rpc/timeline_api' : '') : config.endpoint || localStorage.getItem('timeline-endpoint') || '';
   let draftImage='', imageBusy=false, imageGeneration=0, deleting=null, deleteSnapshot={}, supportsNestedEvents=false, supportsImages=false, parentManuallyChosen = false, supportsSubevents = false, events = [], selected = null, editing = null, draftId = null, password = '', authExpiresAt = 0, authTimer = null, pending = null, zoom = 1, mode = 'track', loading = false;
   const colors = {red:'#c55744',blue:'#4d7daa',green:'#548369',amber:'#b98735',purple:'#8a6aaa'};
+  let timelineGeometry=null, drawTicks=()=>{};
+  const baseWidth=()=>Math.max($('track').clientWidth,800);
+  const maxZoom=()=>16000000/baseWidth();
+  function setZoom(value,anchor=$('track').clientWidth/2) {
+    const track=$('track'), oldWidth=timelineGeometry?.width || baseWidth()*zoom;
+    const fraction=(track.scrollLeft+anchor-30)/(oldWidth-230);
+    zoom=Math.max(1,Math.min(maxZoom(),value));render();
+    const width=timelineGeometry?.width || baseWidth()*zoom;
+    track.scrollLeft=Math.max(0,Math.min(width-track.clientWidth,30+fraction*(width-230)-anchor));
+    drawTicks();
+  }
+  function focusEvent(event) {
+    if(!timelineGeometry)return;
+    const start=D.serial(event.start), later=visibleEvents().filter(e=>e.parentId===event.parentId).map(e=>D.serial(e.start)).filter(s=>s>start);
+    const span=Math.max(1,Math.min(event.end ? D.serial(event.end,true)-start : 365, later.length ? Math.min(...later)-start : Infinity));
+    const viewport=$('track').clientWidth || 800, geometry=timelineGeometry;
+    setZoom((230+(geometry.finish-geometry.start)*viewport*.65/span)/baseWidth());
+    $('track').scrollLeft=Math.max(0,timelineGeometry.x(start)-viewport*.15);drawTicks();
+  }
   function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error',error); }
   function show(id) { $(id).showModal(); }
   function close(id) { $(id).close(); }
@@ -76,8 +95,8 @@
     $('range').textContent = sorted.length ? D.format(sorted[0].start)+' — '+D.format(sorted.reduce((a,b)=>D.serial(a.end||a.start,Boolean(a.end))>D.serial(b.end||b.start,Boolean(b.end))?a:b).end||sorted.reduce((a,b)=>D.serial(a.end||a.start,Boolean(a.end))>D.serial(b.end||b.start,Boolean(b.end))?a:b).start) : 'Tvoja zgodba se šele začenja.';
     const filtered = visibleEvents(); $('empty').hidden = events.length > 0; $('no-results').hidden = !events.length || filtered.length > 0;
     $('track').hidden = !filtered.length || mode !== 'track'; $('list').hidden = !filtered.length || mode !== 'list';
-    $('zoom-label').textContent = Math.round(zoom*100)+' %';
-    $('zoom-in').disabled = zoom >= 8; $('zoom-out').disabled = zoom <= 1;
+    $('zoom-label').textContent = zoom>=10 ? Number(zoom.toFixed(1)).toLocaleString('sl-SI')+'×' : Math.round(zoom*100)+' %';
+    $('zoom-in').disabled = zoom >= maxZoom(); $('zoom-out').disabled = zoom <= 1;
     if (!filtered.length) return;
     if (mode === 'list') {
       $('list').replaceChildren();
@@ -87,10 +106,25 @@
     const canvas = $('canvas'); canvas.replaceChildren();
     const min = Math.min(...filtered.map(e=>D.serial(e.start))), max = Math.max(...filtered.map(e=>D.serial(e.end||e.start,Boolean(e.end))));
     const span = Math.max(max-min,365), pad = span*.09, start = min-pad, finish=max+pad+(max===min ? 365 : 0);
-    const width = Math.max($('track').clientWidth,800)*zoom; canvas.style.width=width+'px';
+    const width = baseWidth()*zoom; canvas.style.width=width+'px';
     const x = value => 30+(value-start)/(finish-start)*(width-230);
+    timelineGeometry={start,finish,width,x};
     const tickCount=Math.max(3,Math.floor(width/145));
-    for(let i=0;i<=tickCount;i++) {const value=Math.round(start+(finish-start)*i/tickCount), date=D.fromSerial(value); const tick=el('div','tick');tick.style.left=x(value)+'px';tick.append(el('span','',span<730 ? D.format(date) : D.format({year:date.year,month:null,day:null})));canvas.append(tick);}
+    // Only draw ticks around the viewport, even when the full canvas spans millions of pixels.
+    drawTicks=()=>{
+      canvas.querySelectorAll('.tick').forEach(t=>t.remove());
+      const step=(width-230)/tickCount, scroll=$('track').scrollLeft, viewport=$('track').clientWidth || 800;
+      const first=Math.max(0,Math.floor((scroll-30)/step)-1), last=Math.min(tickCount,Math.ceil((scroll+viewport-30)/step)+1);
+      const detailed=(finish-start)/tickCount<365;
+      let previous=null;
+      for(let i=first;i<=last;i++) {
+        const value=Math.round(start+(finish-start)*i/tickCount);
+        if(value===previous)continue;previous=value;
+        const date=D.fromSerial(value), tick=el('div','tick');tick.style.left=x(value)+'px';
+        tick.append(el('span','',detailed ? D.format(date) : D.format({year:date.year,month:null,day:null})));canvas.prepend(tick);
+      }
+    };
+    drawTicks();
     // Use the entered boundary (also for year-only dates), so touching periods share a lane.
     const lanes=[], placements=new Map();
     const overlaps=(a,b)=> {
@@ -209,11 +243,21 @@
   $('edit-form').onsubmit=async e=>{e.preventDefault();if(!editingUnlocked()){authorize(()=>$('edit-form').requestSubmit());return;}$('edit-error').textContent='';try{if(imageBusy)throw new Error('Počakaj, da se slika pripravi.');if(draftImage && !/^https:\/\/[^\s]{1,2040}$/.test(draftImage) && !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(draftImage))throw new Error('Vpiši veljaven spletni naslov slike HTTPS.');chooseParentFromDates();const event=D.validate(Object.fromEntries(new FormData(e.target)));const parentId=supportsSubevents ? $('parent-id').value : editing?.parentId||''; const parent=events.find(p=>p.id===parentId); if(parent && (D.serial(event.start)<D.serial(parent.start) || D.serial(event.end||event.start,true)>D.serial(parent.end,true)))throw new Error('Poddogodek mora biti znotraj obdobja nadrejenega dogodka.');$('save').disabled=true;const result=await request('save',{event:{...event,id:draftId,revision:editing?.revision||'',...(supportsSubevents?{parentId}: {}),...(supportsImages?{image:draftImage}: {})},password});events=events.filter(e=>e.id!==result.event.id);events.push(result.event);render();close('edit-dialog');notice('');$('sync').textContent='Vsi dogodki so shranjeni';}catch(err){$('edit-error').textContent=errorText(err);}finally{$('save').disabled=false;}};
   $('search').oninput=render; $('refresh').onclick=load;
   for(const view of ['track','list']) $(view+'-view').onclick=()=>{mode=view;for(const v of ['track','list']){$(v+'-view').classList.toggle('active',v===view);$(v+'-view').setAttribute('aria-pressed',v===view);}document.querySelector('.zoom').hidden=view==='list';render();};
-  $('zoom-in').onclick=()=>{zoom=Math.min(8,zoom*1.5);render();};$('zoom-out').onclick=()=>{zoom=Math.max(1,zoom/1.5);render();};$('fit').onclick=()=>{zoom=1;render();$('track').scrollLeft=0;};
+  $('zoom-in').onclick=()=>setZoom(zoom*1.5);$('zoom-out').onclick=()=>setZoom(zoom/1.5);$('fit').onclick=()=>{zoom=1;render();$('track').scrollLeft=0;drawTicks();};
+  $('track').addEventListener('scroll',()=>drawTicks(),{passive:true});
+  $('track').addEventListener('wheel',event=>{
+    if(!event.ctrlKey || mode!=='track' || !visibleEvents().length)return;
+    event.preventDefault();
+    const delta=event.deltaY*(event.deltaMode===1 ? 16 : event.deltaMode===2 ? $('track').clientHeight : 1);
+    const anchor=Math.max(0,Math.min($('track').clientWidth,event.clientX-$('track').getBoundingClientRect().left-$('track').clientLeft));
+    setZoom(zoom*Math.exp(-Math.max(-400,Math.min(400,delta))*.003),anchor);
+  },{passive:false});
+  $('focus-event').onclick=()=>{const event=selected;close('detail-dialog');$('track-view').click();focusEvent(event);};
   $('settings').hidden=!!native || supabase;$('settings').onclick=()=>{$('endpoint').value=endpoint;$('settings-error').textContent='';show('settings-dialog');};
   $('settings-form').onsubmit=async e=>{e.preventDefault();const url=$('endpoint').value.trim();if(!/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url)){$('settings-error').textContent='Uporabi naslov Google Apps Script, ki se konča z /exec.';return;}endpoint=url;localStorage.setItem('timeline-endpoint',url);events=[];render();close('settings-dialog');await load();};
   let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(render,120);});
   window.addEventListener('focus',()=>{if(!document.querySelector('dialog[open]'))load();});
   load();
 })();
+
 
