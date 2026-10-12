@@ -51,3 +51,14 @@ footer:has(button[hidden]){display:none}
 
 
 .event-bar{min-width:0}.event-bar.compact{padding:10px 2px}.event-bar.compact .event-image{display:none}.event-bar.compact small{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+
+
+/* One height setting controls cards and their row spacing. */
+.canvas .event-bar{height:var(--card-height,88px)}
+.canvas .event-image{height:min(52px,calc(var(--card-height,88px) - 20px))}
+.canvas.short-cards .event-bar{padding-top:6px;padding-bottom:6px;gap:3px}
+.canvas.short-cards .event-bar .parent-label{display:none}
+.height-control{display:flex;align-items:center;gap:8px;white-space:nowrap;font-size:11px}
+.height-control input{width:100px;min-width:60px;height:24px;margin:0;accent-color:var(--accent);cursor:pointer}
+.height-control output{min-width:38px;font-variant-numeric:tabular-nums}
+@media(max-width:760px){.height-control{gap:6px}.height-control input{width:85px;height:30px}.workspace-footer{align-items:center}}

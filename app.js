@@ -8,6 +8,7 @@
   let draftImage='', imageBusy=false, imageGeneration=0, deleting=null, deleteSnapshot={}, supportsNestedEvents=false, supportsImages=false, parentManuallyChosen = false, supportsSubevents = false, events = [], selected = null, editing = null, draftId = null, password = '', authExpiresAt = 0, authTimer = null, pending = null, zoom = 1, mode = 'track', loading = false;
   const colors = {red:'#c55744',blue:'#4d7daa',green:'#548369',amber:'#b98735',purple:'#8a6aaa'};
   let timelineGeometry=null, drawTicks=()=>{};
+  let cardHeight=88;
   const baseWidth=()=>Math.max($('track').clientWidth,800);
   const maxZoom=()=>16000000/baseWidth();
   function setZoom(value,anchor=$('track').clientWidth/2) {
@@ -99,6 +100,10 @@
     $('track').hidden = !filtered.length || mode !== 'track'; $('list').hidden = !filtered.length || mode !== 'list';
     $('zoom-label').textContent = zoom>=10 ? Number(zoom.toFixed(1)).toLocaleString('sl-SI')+'×' : Math.round(zoom*100)+' %';
     $('zoom-in').disabled = zoom >= maxZoom(); $('zoom-out').disabled = zoom <= 1;
+    $('height-control').hidden=mode!=='track';
+    $('card-height-value').textContent=cardHeight+' px';
+    $('canvas').style.setProperty('--card-height',cardHeight+'px');
+    $('canvas').classList.toggle('short-cards',cardHeight<72);
     if (!filtered.length) return;
     if (mode === 'list') {
       $('list').replaceChildren();
@@ -146,14 +151,14 @@
       const left=x(D.serial(e.start)), end=e.end ? x(D.serial(e.end,true)) : left;
       const available=next ? Math.max(1,x(D.serial(next.start))-left-4) : Infinity;
       const barWidth=Math.min(Math.max(190,Math.min(390,end-left)),available);
-      const top=65+row*120;
-      if(e.end){const line=el('div','duration-line');line.style.cssText=`left:${left}px;top:${top+100}px;width:${Math.max(1,Math.min(end-left,available))}px;--event-color:${colors[e.color]}`;canvas.append(line);}
+      const top=65+row*(cardHeight+32);
+      if(e.end){const line=el('div','duration-line');line.style.cssText=`left:${left}px;top:${top+cardHeight+12}px;width:${Math.max(1,Math.min(end-left,available))}px;--event-color:${colors[e.color]}`;canvas.append(line);}
       const b=el('button','event-bar'+(e.parentId?' subevent':''));b.style.cssText=`left:${left}px;top:${top}px;width:${barWidth}px;--event-color:${colors[e.color]}`;b.append(el('strong','',e.title),el('small','',rangeText(e))); if(e.parentId)b.append(el('span','parent-label','↳ '+ancestors(e).map(p=>p.title).join(' › '))); else if(children(e.id).length)b.append(el('span','parent-label',children(e.id).length+' poddogodkov')); if(e.image){b.classList.add('has-image');b.append(imageNode(e,'event-image'));}b.title=e.title+' · '+rangeText(e);b.onclick=()=>detail(e); canvas.append(b);
       // Compact cards retain their full accessible name and open the same detail dialog.
       b.classList.toggle('compact',barWidth<100);
       b.setAttribute('aria-label',e.title+' · '+rangeText(e));
     });
-    canvas.style.height=Math.max(330,110+lanes.length*120)+'px';
+    canvas.style.height=Math.max(330,110+lanes.length*(cardHeight+32))+'px';
   }
   function detail(e) {
     selected=e; $('detail-title').textContent=e.title; $('detail-date').textContent=rangeText(e);
@@ -255,11 +260,18 @@
     setZoom(zoom*Math.exp(-Math.max(-400,Math.min(400,delta))*.003),anchor);
   },{passive:false});
   $('focus-event').onclick=()=>{const event=selected;close('detail-dialog');$('track-view').click();focusEvent(event);};
+  $('card-height').addEventListener('input',()=>{
+    const value=Number($('card-height').value);if(!Number.isFinite(value))return;
+    cardHeight=Math.max(48,Math.min(180,value));
+    const track=$('track'), left=track.scrollLeft, top=track.scrollTop;render();
+    track.scrollLeft=left;track.scrollTop=top;drawTicks();
+  });
   $('settings').hidden=!!native || supabase;$('settings').onclick=()=>{$('endpoint').value=endpoint;$('settings-error').textContent='';show('settings-dialog');};
   $('settings-form').onsubmit=async e=>{e.preventDefault();const url=$('endpoint').value.trim();if(!/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url)){$('settings-error').textContent='Uporabi naslov Google Apps Script, ki se konča z /exec.';return;}endpoint=url;localStorage.setItem('timeline-endpoint',url);events=[];render();close('settings-dialog');await load();};
   let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(render,120);});
   window.addEventListener('focus',()=>{if(!document.querySelector('dialog[open]'))load();});
   load();
 })();
+
 
 
