@@ -104,6 +104,7 @@
     $('card-height-value').textContent=cardHeight+' px';
     $('canvas').style.setProperty('--card-height',cardHeight+'px');
     $('canvas').classList.toggle('short-cards',cardHeight<72);
+    $('canvas').classList.toggle('tiny-cards',cardHeight<48);
     if (!filtered.length) return;
     if (mode === 'list') {
       $('list').replaceChildren();
@@ -111,6 +112,8 @@
       return;
     }
     const canvas = $('canvas'); canvas.replaceChildren();
+    const rowGap=Math.max(16,Math.min(32,Math.round(cardHeight*.36)));
+    const lineGap=Math.round(rowGap*.375);
     const min = Math.min(...filtered.map(e=>D.serial(e.start))), max = Math.max(...filtered.map(e=>D.serial(e.end||e.start,Boolean(e.end))));
     const span = Math.max(max-min,365), pad = span*.09, start = min-pad, finish=max+pad+(max===min ? 365 : 0);
     const width = baseWidth()*zoom; canvas.style.width=width+'px';
@@ -151,14 +154,14 @@
       const left=x(D.serial(e.start)), end=e.end ? x(D.serial(e.end,true)) : left;
       const available=next ? Math.max(1,x(D.serial(next.start))-left-4) : Infinity;
       const barWidth=Math.min(Math.max(190,Math.min(390,end-left)),available);
-      const top=65+row*(cardHeight+32);
-      if(e.end){const line=el('div','duration-line');line.style.cssText=`left:${left}px;top:${top+cardHeight+12}px;width:${Math.max(1,Math.min(end-left,available))}px;--event-color:${colors[e.color]}`;canvas.append(line);}
+      const top=65+row*(cardHeight+rowGap);
+      if(e.end){const line=el('div','duration-line');line.style.cssText=`left:${left}px;top:${top+cardHeight+lineGap}px;width:${Math.max(1,Math.min(end-left,available))}px;--event-color:${colors[e.color]}`;canvas.append(line);}
       const b=el('button','event-bar'+(e.parentId?' subevent':''));b.style.cssText=`left:${left}px;top:${top}px;width:${barWidth}px;--event-color:${colors[e.color]}`;b.append(el('strong','',e.title),el('small','',rangeText(e))); if(e.parentId)b.append(el('span','parent-label','↳ '+ancestors(e).map(p=>p.title).join(' › '))); else if(children(e.id).length)b.append(el('span','parent-label',children(e.id).length+' poddogodkov')); if(e.image){b.classList.add('has-image');b.append(imageNode(e,'event-image'));}b.title=e.title+' · '+rangeText(e);b.onclick=()=>detail(e); canvas.append(b);
       // Compact cards retain their full accessible name and open the same detail dialog.
       b.classList.toggle('compact',barWidth<100);
       b.setAttribute('aria-label',e.title+' · '+rangeText(e));
     });
-    canvas.style.height=Math.max(330,110+lanes.length*(cardHeight+32))+'px';
+    canvas.style.height=Math.max(330,110+lanes.length*(cardHeight+rowGap))+'px';
   }
   function detail(e) {
     selected=e; $('detail-title').textContent=e.title; $('detail-date').textContent=rangeText(e);
@@ -262,7 +265,7 @@
   $('focus-event').onclick=()=>{const event=selected;close('detail-dialog');$('track-view').click();focusEvent(event);};
   $('card-height').addEventListener('input',()=>{
     const value=Number($('card-height').value);if(!Number.isFinite(value))return;
-    cardHeight=Math.max(48,Math.min(180,value));
+    cardHeight=Math.max(24,Math.min(180,value));
     const track=$('track'), left=track.scrollLeft, top=track.scrollTop;render();
     track.scrollLeft=left;track.scrollTop=top;drawTicks();
   });
@@ -272,6 +275,7 @@
   window.addEventListener('focus',()=>{if(!document.querySelector('dialog[open]'))load();});
   load();
 })();
+
 
 
 

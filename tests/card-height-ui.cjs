@@ -14,17 +14,21 @@ w.eval(['dates.js','ids.js','app.js'].map(f=>fs.readFileSync(f,'utf8')).join('\n
 await new Promise(r=>setTimeout(r,0));
 const track=d.querySelector('#track'), canvas=d.querySelector('#canvas'), slider=d.querySelector('#card-height');
 track.scrollLeft=42;track.scrollTop=30;
-for(const height of [48,180,88]){
+assert.equal(slider.min,'24');
+for(const height of [24,32,44,48,180,88]){
   slider.value=height;slider.dispatchEvent(new w.Event('input'));
   assert.equal(canvas.style.getPropertyValue('--card-height'),height+'px');
   assert.equal(d.querySelector('#card-height-value').textContent,height+' px');
   const cards=[...d.querySelectorAll('.event-bar')],lines=[...d.querySelectorAll('.duration-line')];
+  const rowGap=Math.max(16,Math.min(32,Math.round(height*.36)));
   assert.equal(cards.length,3);
   cards.forEach((card,row)=>{
-    assert.equal(parseFloat(card.style.top),65+row*(height+32),'Every nested lane uses the chosen height');
-    assert.equal(parseFloat(lines[row].style.top),parseFloat(card.style.top)+height+12,'Duration lines remain below the cards');
+    assert.equal(parseFloat(card.style.top),65+row*(height+rowGap),'Every nested lane uses the chosen height');
+    assert.equal(parseFloat(lines[row].style.top),parseFloat(card.style.top)+height+Math.round(rowGap*.375),'Duration lines remain below the cards');
+    if(row<cards.length-1)assert.ok(parseFloat(lines[row].style.top)+6<65+(row+1)*(height+rowGap),'Duration lines do not overlap the next row');
   });
   assert.equal(canvas.classList.contains('short-cards'),height<72);
+  assert.equal(canvas.classList.contains('tiny-cards'),height<48);
   assert.equal(track.scrollLeft,42);assert.equal(track.scrollTop,30);
 }
 slider.value=180;slider.dispatchEvent(new w.Event('input'));
@@ -35,3 +39,4 @@ d.querySelector('#refresh').click();await new Promise(r=>setTimeout(r,0));
 assert.equal(canvas.style.getPropertyValue('--card-height'),'180px','Data refresh preserves the selected height');
 w.close();console.log('Card height passed: all hierarchy levels, line offsets, extremes, scrolling, view switches and refresh.');
 })();
+

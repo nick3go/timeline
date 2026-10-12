@@ -62,3 +62,11 @@ footer:has(button[hidden]){display:none}
 .height-control input{width:100px;min-width:60px;height:24px;margin:0;accent-color:var(--accent);cursor:pointer}
 .height-control output{min-width:38px;font-variant-numeric:tabular-nums}
 @media(max-width:760px){.height-control{gap:6px}.height-control input{width:85px;height:30px}.workspace-footer{align-items:center}}
+
+
+.canvas.tiny-cards .event-bar{padding-top:1px;padding-bottom:1px;gap:1px}
+.canvas.tiny-cards .event-bar strong{font-size:10px;line-height:10px}
+.canvas.tiny-cards .event-bar small{font-size:8px;line-height:8px}
+.canvas.tiny-cards .event-image{display:none}
+.canvas.tiny-cards .event-bar.has-image{padding-right:14px}
+.canvas.tiny-cards .event-bar.compact{padding-right:2px}
